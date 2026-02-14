@@ -32,6 +32,7 @@ from .const import (
     CONF_ENABLE_GROUPS,
     CONF_ENABLE_SCENES,
     CONF_ENABLE_SEGMENTS,
+    CONF_ENABLE_SNAPSHOTS,
     CONF_PASSWORD,
     CONF_POLL_INTERVAL,
     CONFIG_VERSION,
@@ -39,6 +40,7 @@ from .const import (
     DEFAULT_ENABLE_GROUPS,
     DEFAULT_ENABLE_SCENES,
     DEFAULT_ENABLE_SEGMENTS,
+    DEFAULT_ENABLE_SNAPSHOTS,
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
     KEY_IOT_CREDENTIALS,
@@ -242,6 +244,7 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_ENABLE_GROUPS: DEFAULT_ENABLE_GROUPS,
                 CONF_ENABLE_SCENES: DEFAULT_ENABLE_SCENES,
                 CONF_ENABLE_DIY_SCENES: DEFAULT_ENABLE_DIY_SCENES,
+                CONF_ENABLE_SNAPSHOTS: DEFAULT_ENABLE_SNAPSHOTS,
                 CONF_ENABLE_SEGMENTS: DEFAULT_ENABLE_SEGMENTS,
             },
         )
@@ -465,6 +468,12 @@ class GoveeOptionsFlow(OptionsFlow):
                         CONF_ENABLE_DIY_SCENES,
                         default=options.get(
                             CONF_ENABLE_DIY_SCENES, DEFAULT_ENABLE_DIY_SCENES
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_ENABLE_SNAPSHOTS,
+                        default=options.get(
+                            CONF_ENABLE_SNAPSHOTS, DEFAULT_ENABLE_SNAPSHOTS
                         ),
                     ): bool,
                     vol.Optional(

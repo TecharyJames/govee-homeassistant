@@ -14,6 +14,7 @@ from custom_components.govee.models import (
     ColorCommand,
     ColorTempCommand,
     SceneCommand,
+    SnapshotCommand,
     SegmentColorCommand,
     OscillationCommand,
     WorkModeCommand,
@@ -33,6 +34,7 @@ from custom_components.govee.models.device import (
     INSTANCE_COLOR_RGB,
     INSTANCE_COLOR_TEMP,
     INSTANCE_SCENE,
+    INSTANCE_SNAPSHOT,
     INSTANCE_OSCILLATION,
     INSTANCE_WORK_MODE,
     INSTANCE_HDMI_SOURCE,
@@ -133,6 +135,13 @@ class TestGoveeCapability:
         cap = GoveeCapability(type=CAPABILITY_DYNAMIC_SCENE, instance=INSTANCE_SCENE, parameters={})
         assert cap.is_scene is True
 
+    def test_is_snapshot(self):
+        """Test snapshot capability detection."""
+        cap = GoveeCapability(type=CAPABILITY_DYNAMIC_SCENE, instance=INSTANCE_SNAPSHOT, parameters={})
+        assert cap.is_snapshot is True
+        assert cap.is_scene is False
+        assert cap.is_diy_scene is False
+
     def test_is_oscillation(self):
         """Test oscillation capability detection (fans)."""
         cap = GoveeCapability(type=CAPABILITY_TOGGLE, instance=INSTANCE_OSCILLATION, parameters={})
@@ -224,6 +233,28 @@ class TestGoveeDevice:
     def test_supports_scenes(self, mock_light_device):
         """Test scene support detection."""
         assert mock_light_device.supports_scenes is True
+
+    def test_supports_snapshots(self, mock_snapshot_device):
+        """Test snapshot support detection."""
+        assert mock_snapshot_device.supports_snapshots is True
+
+    def test_supports_snapshots_false(self, mock_light_device):
+        """Test snapshot support is false when not present."""
+        assert mock_light_device.supports_snapshots is False
+
+    def test_get_snapshot_options(self, mock_snapshot_device):
+        """Test extracting snapshot options from device capabilities."""
+        options = mock_snapshot_device.get_snapshot_options()
+        assert len(options) == 3
+        assert options[0]["name"] == "Morning Light"
+        assert options[0]["value"] == 12345
+        assert options[1]["name"] == "Evening Ambiance"
+        assert options[2]["name"] == "Reading Mode"
+
+    def test_get_snapshot_options_empty(self, mock_light_device):
+        """Test get_snapshot_options returns empty list when no snapshots."""
+        options = mock_light_device.get_snapshot_options()
+        assert options == []
 
     def test_supports_segments(self, mock_rgbic_device):
         """Test segment support detection."""
@@ -608,6 +639,45 @@ class TestGoveeDeviceState:
         assert state.dreamview_enabled is False
         assert state.music_mode_enabled is False
 
+    def test_snapshot_clears_all_modes(self):
+        """Test selecting snapshot clears scene, DIY scene, DreamView, and music mode."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.active_scene = "123"
+        state.active_diy_scene = "456"
+        state.dreamview_enabled = True
+        state.music_mode_enabled = True
+        state.apply_optimistic_snapshot("789")
+        assert state.active_snapshot == "789"
+        assert state.active_scene is None
+        assert state.active_diy_scene is None
+        assert state.dreamview_enabled is False
+        assert state.music_mode_enabled is False
+
+    def test_scene_clears_snapshot(self):
+        """Test selecting scene clears snapshot."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.active_snapshot = "789"
+        state.apply_optimistic_scene("123")
+        assert state.active_scene == "123"
+        assert state.active_snapshot is None
+
+    def test_diy_scene_clears_snapshot(self):
+        """Test selecting DIY scene clears snapshot."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.active_snapshot = "789"
+        state.apply_optimistic_diy_scene("456")
+        assert state.active_diy_scene == "456"
+        assert state.active_snapshot is None
+
+    def test_power_off_clears_snapshot(self):
+        """Test turning power off clears snapshot."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.active_snapshot = "789"
+        state.power_state = True
+        state.apply_optimistic_power(False)
+        assert state.power_state is False
+        assert state.active_snapshot is None
+
 
 # ==============================================================================
 # Command Tests
@@ -656,6 +726,16 @@ class TestCommands:
         value = cmd.get_value()
         assert value["id"] == 123
         assert value["name"] == "Sunrise"
+
+    def test_snapshot_command(self):
+        """Test snapshot command."""
+        cmd = SnapshotCommand(snapshot_id=456, snapshot_name="Evening Ambiance")
+        value = cmd.get_value()
+        assert value == 456
+        payload = cmd.to_api_payload()
+        assert payload["type"] == "devices.capabilities.dynamic_scene"
+        assert payload["instance"] == "snapshot"
+        assert payload["value"] == 456
 
     def test_segment_color_command(self):
         """Test segment color command."""

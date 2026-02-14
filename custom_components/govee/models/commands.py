@@ -31,6 +31,7 @@ from .device import (
     INSTANCE_POWER,
     INSTANCE_SCENE,
     INSTANCE_SEGMENT_COLOR,
+    INSTANCE_SNAPSHOT,
     INSTANCE_WORK_MODE,
 )
 from .state import RGBColor
@@ -186,6 +187,29 @@ class DIYSceneCommand(DeviceCommand):
 
     def get_value(self) -> int:
         return self.scene_id
+
+
+@dataclass(frozen=True)
+class SnapshotCommand(DeviceCommand):
+    """Command to activate a snapshot.
+
+    Snapshots are user-created scene presets configured in the Govee app.
+    They capture the current device state and can be recalled later.
+    """
+
+    snapshot_id: int
+    snapshot_name: str = ""
+
+    @property
+    def capability_type(self) -> str:
+        return CAPABILITY_DYNAMIC_SCENE
+
+    @property
+    def instance(self) -> str:
+        return INSTANCE_SNAPSHOT
+
+    def get_value(self) -> int:
+        return self.snapshot_id
 
 
 @dataclass(frozen=True)

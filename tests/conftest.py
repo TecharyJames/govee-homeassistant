@@ -35,6 +35,7 @@ from custom_components.govee.models.device import (
     INSTANCE_OSCILLATION,
     INSTANCE_POWER,
     INSTANCE_SCENE,
+    INSTANCE_SNAPSHOT,
     INSTANCE_WORK_MODE,
 )
 
@@ -555,3 +556,65 @@ def mock_dreamview_device(dreamview_capabilities) -> GoveeDevice:
         capabilities=dreamview_capabilities,
         is_group=False,
     )
+
+
+@pytest.fixture
+def snapshot_capabilities() -> tuple[GoveeCapability, ...]:
+    """Create capabilities for a device with snapshot support."""
+    return (
+        GoveeCapability(
+            type=CAPABILITY_ON_OFF,
+            instance=INSTANCE_POWER,
+            parameters={},
+        ),
+        GoveeCapability(
+            type=CAPABILITY_RANGE,
+            instance=INSTANCE_BRIGHTNESS,
+            parameters={"range": {"min": 0, "max": 100}},
+        ),
+        GoveeCapability(
+            type=CAPABILITY_COLOR_SETTING,
+            instance=INSTANCE_COLOR_RGB,
+            parameters={},
+        ),
+        GoveeCapability(
+            type=CAPABILITY_DYNAMIC_SCENE,
+            instance=INSTANCE_SCENE,
+            parameters={},
+        ),
+        GoveeCapability(
+            type=CAPABILITY_DYNAMIC_SCENE,
+            instance=INSTANCE_SNAPSHOT,
+            parameters={
+                "dataType": "ENUM",
+                "options": [
+                    {"name": "Morning Light", "value": 12345},
+                    {"name": "Evening Ambiance", "value": 12346},
+                    {"name": "Reading Mode", "value": 12347},
+                ],
+            },
+        ),
+    )
+
+
+@pytest.fixture
+def mock_snapshot_device(snapshot_capabilities) -> GoveeDevice:
+    """Create a mock device with snapshot support (e.g., H601F Floor Lamp)."""
+    return GoveeDevice(
+        device_id="AA:BB:CC:DD:EE:FF:00:77",
+        sku="H601F",
+        name="Floor Lamp",
+        device_type=DEVICE_TYPE_LIGHT,
+        capabilities=snapshot_capabilities,
+        is_group=False,
+    )
+
+
+@pytest.fixture
+def mock_snapshots() -> list[dict[str, Any]]:
+    """Create mock snapshot data."""
+    return [
+        {"name": "Morning Light", "value": 12345},
+        {"name": "Evening Ambiance", "value": 12346},
+        {"name": "Reading Mode", "value": 12347},
+    ]

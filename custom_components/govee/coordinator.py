@@ -40,6 +40,7 @@ from .models.commands import (
     MusicModeCommand,
     PowerCommand,
     SceneCommand,
+    SnapshotCommand,
     ToggleCommand,
     create_dreamview_command,
 )
@@ -860,6 +861,8 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
             state.apply_optimistic_scene(str(command.scene_id), command.scene_name)
         elif isinstance(command, DIYSceneCommand):
             state.apply_optimistic_diy_scene(str(command.scene_id))
+        elif isinstance(command, SnapshotCommand):
+            state.apply_optimistic_snapshot(str(command.snapshot_id))
         elif isinstance(command, ModeCommand):
             if command.mode_instance == INSTANCE_HDMI_SOURCE:
                 state.apply_optimistic_hdmi_source(command.value)
@@ -928,6 +931,31 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         state = self._states.get(device_id)
         if state:
             state.active_diy_scene = None
+            state.source = "optimistic"
+
+    def get_snapshots(self, device_id: str) -> list[dict[str, Any]]:
+        """Get available snapshots for a device.
+
+        Snapshots are user-created scene presets embedded in device capabilities.
+        Unlike scenes and DIY scenes, snapshots don't require an API call -
+        they're returned directly from the device capabilities.
+
+        Args:
+            device_id: Device identifier.
+
+        Returns:
+            List of snapshot definitions with name and value.
+        """
+        device = self._devices.get(device_id)
+        if device:
+            return device.get_snapshot_options()
+        return []
+
+    def clear_snapshot(self, device_id: str) -> None:
+        """Clear active snapshot for a device."""
+        state = self._states.get(device_id)
+        if state:
+            state.active_snapshot = None
             state.source = "optimistic"
 
     def clear_music_mode(self, device_id: str) -> None:

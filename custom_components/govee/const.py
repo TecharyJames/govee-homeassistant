@@ -14,6 +14,7 @@ CONF_POLL_INTERVAL: Final = "poll_interval"
 CONF_ENABLE_GROUPS: Final = "enable_groups"
 CONF_ENABLE_SCENES: Final = "enable_scenes"
 CONF_ENABLE_DIY_SCENES: Final = "enable_diy_scenes"
+CONF_ENABLE_SNAPSHOTS: Final = "enable_snapshots"
 CONF_ENABLE_SEGMENTS: Final = "enable_segments"
 
 # Defaults
@@ -21,6 +22,7 @@ DEFAULT_POLL_INTERVAL: Final = 60  # seconds
 DEFAULT_ENABLE_GROUPS: Final = False
 DEFAULT_ENABLE_SCENES: Final = True
 DEFAULT_ENABLE_DIY_SCENES: Final = True
+DEFAULT_ENABLE_SNAPSHOTS: Final = True
 DEFAULT_ENABLE_SEGMENTS: Final = True
 
 # Config entry version (fresh start)
@@ -36,6 +38,7 @@ SUFFIX_SEGMENT: Final = "_segment_"
 SUFFIX_SCENE_SELECT: Final = "_scene_select"
 SUFFIX_DIY_SCENE_SELECT: Final = "_diy_scene_select"
 SUFFIX_DIY_STYLE_SELECT: Final = "_diy_style_select"
+SUFFIX_SNAPSHOT_SELECT: Final = "_snapshot_select"
 SUFFIX_HDMI_SOURCE_SELECT: Final = "_hdmi_source_select"
 SUFFIX_MUSIC_MODE_SELECT: Final = "_music_mode_select"
 SUFFIX_REFRESH_SCENES: Final = "_refresh_scenes"

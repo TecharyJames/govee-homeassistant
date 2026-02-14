@@ -18,13 +18,16 @@ from .api.ble_packet import DIY_STYLE_NAMES
 from .const import (
     CONF_ENABLE_DIY_SCENES,
     CONF_ENABLE_SCENES,
+    CONF_ENABLE_SNAPSHOTS,
     DEFAULT_ENABLE_DIY_SCENES,
     DEFAULT_ENABLE_SCENES,
+    DEFAULT_ENABLE_SNAPSHOTS,
     SUFFIX_DIY_SCENE_SELECT,
     SUFFIX_DIY_STYLE_SELECT,
     SUFFIX_HDMI_SOURCE_SELECT,
     SUFFIX_MUSIC_MODE_SELECT,
     SUFFIX_SCENE_SELECT,
+    SUFFIX_SNAPSHOT_SELECT,
 )
 from .coordinator import GoveeCoordinator
 from .entity import GoveeEntity
@@ -34,6 +37,7 @@ from .models import (
     ModeCommand,
     MusicModeCommand,
     SceneCommand,
+    SnapshotCommand,
 )
 from .models.device import INSTANCE_HDMI_SOURCE
 
@@ -62,10 +66,15 @@ async def async_setup_entry(
         CONF_ENABLE_DIY_SCENES, DEFAULT_ENABLE_DIY_SCENES
     )
 
+    enable_snapshots = entry.options.get(
+        CONF_ENABLE_SNAPSHOTS, DEFAULT_ENABLE_SNAPSHOTS
+    )
+
     _LOGGER.debug(
-        "Scene entity setup: enable_scenes=%s enable_diy_scenes=%s",
+        "Scene entity setup: enable_scenes=%s enable_diy_scenes=%s enable_snapshots=%s",
         enable_scenes,
         enable_diy_scenes,
+        enable_snapshots,
     )
 
     for device in coordinator.devices.values():
@@ -125,6 +134,20 @@ async def async_setup_entry(
                 )
             )
             _LOGGER.debug("Created DIY style select entity for %s", device.name)
+
+        # Snapshots (user-created scene presets from device capabilities)
+        if enable_snapshots and device.supports_snapshots:
+            snapshots = coordinator.get_snapshots(device.device_id)
+            _LOGGER.debug("Found %d snapshots for %s", len(snapshots), device.name)
+            if snapshots:
+                entities.append(
+                    GoveeSnapshotSelectEntity(
+                        coordinator=coordinator,
+                        device=device,
+                        snapshots=snapshots,
+                    )
+                )
+                _LOGGER.debug("Created snapshot select entity for %s", device.name)
 
         # HDMI source selector (for devices like AI Sync Box H6604)
         if device.supports_hdmi_source:
@@ -393,6 +416,118 @@ class GoveeDIYSceneSelectEntity(GoveeEntity, SelectEntity):
             _LOGGER.warning(
                 "Failed to activate DIY scene '%s' on %s",
                 scene_name,
+                self._device.name,
+            )
+
+
+class GoveeSnapshotSelectEntity(GoveeEntity, SelectEntity):
+    """Govee snapshot select entity.
+
+    Provides a dropdown to select and activate snapshots on a device.
+    Snapshots are user-created scene presets configured in the Govee app.
+
+    Snapshot, Scene, DIY Scene, Music Mode, and DreamView are mutually exclusive.
+    """
+
+    _attr_translation_key = "govee_snapshot_select"
+    _attr_icon = "mdi:camera"
+
+    def __init__(
+        self,
+        coordinator: GoveeCoordinator,
+        device: GoveeDevice,
+        snapshots: list[dict[str, Any]],
+    ) -> None:
+        """Initialize the snapshot select entity.
+
+        Args:
+            coordinator: Govee data coordinator.
+            device: Device this select belongs to.
+            snapshots: List of snapshot data from API.
+        """
+        super().__init__(coordinator, device)
+
+        # Build snapshot mapping: name -> (id, name)
+        self._snapshot_map: dict[str, tuple[int, str]] = {}
+        # Reverse mapping: snapshot_id (as string) -> option name
+        self._snapshot_id_to_option: dict[str, str] = {}
+        options = [SCENE_NONE]
+
+        for snapshot_data in snapshots:
+            # Snapshots use integer value similar to DIY scenes
+            snapshot_id = snapshot_data.get("value", 0)
+            snapshot_name = snapshot_data.get("name", f"Snapshot {snapshot_id}")
+
+            # Handle duplicate names by appending ID
+            unique_name = snapshot_name
+            counter = 1
+            while unique_name in self._snapshot_map:
+                unique_name = f"{snapshot_name} ({counter})"
+                counter += 1
+
+            self._snapshot_map[unique_name] = (snapshot_id, snapshot_name)
+            self._snapshot_id_to_option[str(snapshot_id)] = unique_name
+            options.append(unique_name)
+
+        self._attr_options = options
+
+        # Unique ID
+        self._attr_unique_id = f"{device.device_id}{SUFFIX_SNAPSHOT_SELECT}"
+
+    @property
+    def current_option(self) -> str | None:
+        """Return current selected option from state.
+
+        Reads from coordinator state to reflect mutual exclusion.
+        """
+        state = self.coordinator.get_state(self._device_id)
+        if state and state.active_snapshot:
+            # Look up option name from snapshot ID
+            option = self._snapshot_id_to_option.get(state.active_snapshot)
+            if option:
+                return option
+        return SCENE_NONE
+
+    async def async_select_option(self, option: str) -> None:
+        """Handle snapshot selection.
+
+        Selecting a snapshot clears other modes (mutual exclusion).
+        """
+        if option == SCENE_NONE:
+            # Clear the snapshot state via coordinator
+            self.coordinator.clear_snapshot(self._device_id)
+            self.async_write_ha_state()
+            return
+
+        snapshot_info = self._snapshot_map.get(option)
+        if not snapshot_info:
+            _LOGGER.warning("Unknown snapshot option: %s", option)
+            return
+
+        snapshot_id, snapshot_name = snapshot_info
+
+        command = SnapshotCommand(
+            snapshot_id=snapshot_id,
+            snapshot_name=snapshot_name,
+        )
+
+        success = await self.coordinator.async_control_device(
+            self._device_id,
+            command,
+        )
+
+        if success:
+            # State update with mutual exclusion is handled in coordinator
+            self.async_write_ha_state()
+            _LOGGER.debug(
+                "Activated snapshot '%s' on %s",
+                snapshot_name,
+                self._device.name,
+            )
+        else:
+            _LOGGER.warning(
+                "Failed to activate snapshot '%s' on %s",
+                snapshot_name,
                 self._device.name,
             )
 

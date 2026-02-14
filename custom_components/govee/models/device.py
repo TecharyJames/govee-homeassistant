@@ -38,6 +38,7 @@ INSTANCE_COLOR_TEMP = "colorTemperatureK"
 INSTANCE_SEGMENT_COLOR = "segmentedColorRgb"
 INSTANCE_SCENE = "lightScene"
 INSTANCE_DIY = "diyScene"
+INSTANCE_SNAPSHOT = "snapshot"
 INSTANCE_NIGHT_LIGHT = "nightlightToggle"
 INSTANCE_GRADUAL_ON = "gradientToggle"
 INSTANCE_TIMER = "timer"
@@ -168,6 +169,17 @@ class GoveeCapability:
         )
 
     @property
+    def is_snapshot(self) -> bool:
+        """Check if this is a snapshot capability.
+
+        Uses case-insensitive matching for robustness.
+        """
+        return (
+            self.type == CAPABILITY_DYNAMIC_SCENE
+            and self.instance.lower() == INSTANCE_SNAPSHOT.lower()
+        )
+
+    @property
     def is_toggle(self) -> bool:
         """Check if this is a toggle capability."""
         return self.type == CAPABILITY_TOGGLE
@@ -259,6 +271,11 @@ class GoveeDevice:
         return any(cap.is_diy_scene for cap in self.capabilities)
 
     @property
+    def supports_snapshots(self) -> bool:
+        """Check if device supports snapshots."""
+        return any(cap.is_snapshot for cap in self.capabilities)
+
+    @property
     def supports_night_light(self) -> bool:
         """Check if device supports night light toggle."""
         return any(cap.is_night_light for cap in self.capabilities)
@@ -310,6 +327,18 @@ class GoveeDevice:
         """Get available HDMI source options from capability parameters."""
         for cap in self.capabilities:
             if cap.is_hdmi_source:
+                options: list[dict[str, Any]] = cap.parameters.get("options", [])
+                return options
+        return []
+
+    def get_snapshot_options(self) -> list[dict[str, Any]]:
+        """Get available snapshot options from capability parameters.
+
+        Snapshots are user-created scene presets embedded in device capabilities.
+        Returns list of {"name": "Morning Light", "value": 12345} dicts.
+        """
+        for cap in self.capabilities:
+            if cap.is_snapshot:
                 options: list[dict[str, Any]] = cap.parameters.get("options", [])
                 return options
         return []

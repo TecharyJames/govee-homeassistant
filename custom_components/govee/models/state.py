@@ -84,6 +84,7 @@ class GoveeDeviceState:
     color_temp_kelvin: int | None = None
     active_scene: str | None = None
     active_diy_scene: str | None = None  # DIY scene ID (separate from regular scenes)
+    active_snapshot: str | None = None  # Snapshot ID (user-created scene presets)
     segments: list[SegmentState] = field(default_factory=list)
     diy_style: str | None = None  # DIY animation style (Fade, Jumping, etc.)
     diy_style_value: int | None = None  # DIY animation style numeric value (0-4)
@@ -195,9 +196,10 @@ class GoveeDeviceState:
         """Apply optimistic power state update."""
         self.power_state = power_on
         self.source = "optimistic"
-        # Clear scene when turning off (scene is no longer active)
+        # Clear scenes/snapshots when turning off (no longer active)
         if not power_on:
             self.active_scene = None
+            self.active_snapshot = None
 
     def apply_optimistic_brightness(self, brightness: int) -> None:
         """Apply optimistic brightness update."""
@@ -222,7 +224,7 @@ class GoveeDeviceState:
         """Apply optimistic scene activation.
 
         Scenes, Music Mode, and DreamView are mutually exclusive.
-        When a Scene is activated, DreamView, music mode, and DIY scene are cleared.
+        When a Scene is activated, DreamView, music mode, DIY scene, and snapshot are cleared.
         """
         self.active_scene = scene_id
         self.last_scene_id = scene_id
@@ -234,6 +236,7 @@ class GoveeDeviceState:
         self.music_mode_value = None
         self.music_mode_name = None
         self.active_diy_scene = None
+        self.active_snapshot = None
 
     def apply_optimistic_diy_scene(self, scene_id: str) -> None:
         """Apply optimistic DIY scene activation.
@@ -249,6 +252,23 @@ class GoveeDeviceState:
         self.music_mode_value = None
         self.music_mode_name = None
         self.active_scene = None
+        self.active_snapshot = None
+
+    def apply_optimistic_snapshot(self, snapshot_id: str) -> None:
+        """Apply optimistic snapshot activation.
+
+        Snapshots, Scenes, DIY Scenes, Music Mode, and DreamView are mutually exclusive.
+        When a Snapshot is activated, other modes are cleared.
+        """
+        self.active_snapshot = snapshot_id
+        self.source = "optimistic"
+        # Mutual exclusion: clear other modes when activating snapshot
+        self.dreamview_enabled = False
+        self.music_mode_enabled = False
+        self.music_mode_value = None
+        self.music_mode_name = None
+        self.active_scene = None
+        self.active_diy_scene = None
 
     def apply_optimistic_diy_style(
         self, style: str, style_value: int | None = None
@@ -267,7 +287,7 @@ class GoveeDeviceState:
         """Apply optimistic music mode update (legacy BLE).
 
         Music Mode, DreamView, and Scenes are mutually exclusive.
-        When Music Mode is enabled, DreamView and scenes are cleared.
+        When Music Mode is enabled, DreamView, scenes, and snapshots are cleared.
         """
         self.music_mode_enabled = enabled
         self.source = "optimistic"
@@ -276,6 +296,7 @@ class GoveeDeviceState:
             self.dreamview_enabled = False
             self.active_scene = None
             self.active_diy_scene = None
+            self.active_snapshot = None
 
     def apply_optimistic_music_mode_struct(
         self,
@@ -286,7 +307,7 @@ class GoveeDeviceState:
         """Apply optimistic music mode update (STRUCT-based REST API).
 
         Music Mode, DreamView, and Scenes are mutually exclusive.
-        When Music Mode is enabled, DreamView and active scene are cleared.
+        When Music Mode is enabled, DreamView, scenes, and snapshots are cleared.
 
         Args:
             music_mode: Music mode value (1-11).
@@ -302,6 +323,7 @@ class GoveeDeviceState:
         self.dreamview_enabled = False
         self.active_scene = None
         self.active_diy_scene = None
+        self.active_snapshot = None
 
     def apply_optimistic_oscillation(self, oscillating: bool) -> None:
         """Apply optimistic oscillation update (fans)."""
@@ -323,7 +345,7 @@ class GoveeDeviceState:
         """Apply optimistic DreamView (Movie Mode) update.
 
         DreamView, Music Mode, and Scenes are mutually exclusive.
-        When DreamView is enabled, music mode and scenes are cleared.
+        When DreamView is enabled, music mode, scenes, and snapshots are cleared.
         """
         self.dreamview_enabled = enabled
         self.source = "optimistic"
@@ -334,6 +356,7 @@ class GoveeDeviceState:
             self.music_mode_name = None
             self.active_scene = None
             self.active_diy_scene = None
+            self.active_snapshot = None
 
     @classmethod
     def create_empty(cls, device_id: str) -> GoveeDeviceState:

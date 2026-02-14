@@ -69,6 +69,7 @@
           "enable_groups": "Enable group devices",
           "enable_scenes": "Enable scene selector",
           "enable_diy_scenes": "Enable DIY scene selector",
+          "enable_snapshots": "Enable snapshot selector",
           "enable_segments": "Enable segment entities"
         }
       }
@@ -97,6 +98,9 @@
       },
       "govee_diy_style_select": {
         "name": "DIY Style"
+      },
+      "govee_snapshot_select": {
+        "name": "Snapshot"
       },
       "govee_hdmi_source_select": {
         "name": "HDMI Source"
