@@ -17,6 +17,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
+from homeassistant.helpers import config_validation as cv
 
 from .api import (
     GoveeApiError,
@@ -35,6 +36,7 @@ from .const import (
     CONF_ENABLE_SNAPSHOTS,
     CONF_PASSWORD,
     CONF_POLL_INTERVAL,
+    CONF_SEGMENT_MODE,
     CONFIG_VERSION,
     DEFAULT_ENABLE_DIY_SCENES,
     DEFAULT_ENABLE_GROUPS,
@@ -42,9 +44,13 @@ from .const import (
     DEFAULT_ENABLE_SEGMENTS,
     DEFAULT_ENABLE_SNAPSHOTS,
     DEFAULT_POLL_INTERVAL,
+    DEFAULT_SEGMENT_MODE,
     DOMAIN,
     KEY_IOT_CREDENTIALS,
     KEY_IOT_LOGIN_FAILED,
+    SEGMENT_MODE_DISABLED,
+    SEGMENT_MODE_GROUPED,
+    SEGMENT_MODE_INDIVIDUAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -246,6 +252,7 @@ class GoveeConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_ENABLE_DIY_SCENES: DEFAULT_ENABLE_DIY_SCENES,
                 CONF_ENABLE_SNAPSHOTS: DEFAULT_ENABLE_SNAPSHOTS,
                 CONF_ENABLE_SEGMENTS: DEFAULT_ENABLE_SEGMENTS,
+                CONF_SEGMENT_MODE: DEFAULT_SEGMENT_MODE,
             },
         )
 
@@ -431,22 +438,38 @@ class GoveeOptionsFlow(OptionsFlow):
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize options flow."""
         self._config_entry = config_entry
+        self._global_options: dict[str, Any] = {}
+        self._selected_devices: list[str] = []
+        self._device_modes: dict[str, str] = {}
+        self._device_index: int = 0
 
     async def async_step_init(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Handle options flow."""
+        """Handle global options flow."""
         if user_input is not None:
-            _LOGGER.info("Options saved: %s", user_input)
-            _LOGGER.debug(
-                "Previous options: %s",
-                self._config_entry.options,
-            )
-            return self.async_create_entry(title="", data=user_input)
+            # Save global options and proceed to device selection if applicable
+            self._global_options = user_input
+            _LOGGER.debug("Global options saved: %s", user_input)
+
+            # Check if we have RGBIC devices to configure
+            coordinator = self._config_entry.runtime_data
+            rgbic_devices = [
+                d
+                for d in coordinator.devices.values()
+                if d.segment_count > 0
+            ]
+
+            if rgbic_devices:
+                _LOGGER.debug("Found %d RGBIC devices, proceeding to device selection", len(rgbic_devices))
+                return await self.async_step_select_segment_devices()
+            else:
+                _LOGGER.debug("No RGBIC devices found, saving options")
+                return self.async_create_entry(title="", data=user_input)
 
         options = self._config_entry.options
-        _LOGGER.debug("Showing options form with current values: %s", options)
+        _LOGGER.debug("Showing global options form with current values: %s", options)
 
         return self.async_show_form(
             step_id="init",
@@ -476,12 +499,104 @@ class GoveeOptionsFlow(OptionsFlow):
                             CONF_ENABLE_SNAPSHOTS, DEFAULT_ENABLE_SNAPSHOTS
                         ),
                     ): bool,
-                    vol.Optional(
-                        CONF_ENABLE_SEGMENTS,
-                        default=options.get(
-                            CONF_ENABLE_SEGMENTS, DEFAULT_ENABLE_SEGMENTS
-                        ),
-                    ): bool,
                 }
             ),
+        )
+
+    async def async_step_select_segment_devices(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Select which RGBIC devices to configure individually."""
+        coordinator = self._config_entry.runtime_data
+        rgbic_devices = {
+            d.device_id: f"{d.name} ({d.device_id})"
+            for d in coordinator.devices.values()
+            if d.segment_count > 0
+        }
+
+        if user_input is not None:
+            # User selected devices to configure
+            self._selected_devices = user_input.get("devices", list(rgbic_devices.keys()))
+            _LOGGER.debug(
+                "Selected %d devices for per-device configuration: %s",
+                len(self._selected_devices),
+                self._selected_devices,
+            )
+
+            if self._selected_devices:
+                self._device_index = 0
+                self._device_modes = {}
+                return await self.async_step_configure_device_mode()
+            else:
+                # No devices selected, save global options only
+                _LOGGER.debug("No devices selected, saving global options only")
+                return self.async_create_entry(title="", data=self._global_options)
+
+        # Show device selector
+        all_device_ids = list(rgbic_devices.keys())
+        _LOGGER.debug("Showing device selector with %d RGBIC devices", len(rgbic_devices))
+
+        return self.async_show_form(
+            step_id="select_segment_devices",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        "devices",
+                        default=all_device_ids,
+                    ): cv.multi_select(rgbic_devices),
+                }
+            ),
+        )
+
+    async def async_step_configure_device_mode(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Configure segment mode for one device at a time."""
+        if user_input is not None:
+            device_id = self._selected_devices[self._device_index]
+            self._device_modes[device_id] = user_input["segment_mode"]
+            self._device_index += 1
+
+            # More devices? Loop back. Otherwise save.
+            if self._device_index < len(self._selected_devices):
+                return await self.async_step_configure_device_mode()
+
+            # Done — build final data and save
+            new_data = {**self._global_options, "segment_mode_by_device": self._device_modes}
+            _LOGGER.info("Options saved: %s", new_data)
+            _LOGGER.debug("Device modes configured: %s", self._device_modes)
+            return self.async_create_entry(title="", data=new_data)
+
+        # Show form for the current device
+        coordinator = self._config_entry.runtime_data
+        current_device_modes = self._config_entry.options.get("segment_mode_by_device", {})
+
+        device_id = self._selected_devices[self._device_index]
+        device = coordinator.devices.get(device_id)
+        device_name = device.name if device else device_id
+        default_mode = current_device_modes.get(device_id, SEGMENT_MODE_INDIVIDUAL)
+
+        _LOGGER.debug(
+            "Showing segment mode form for device %d/%d: %s (%s)",
+            self._device_index + 1,
+            len(self._selected_devices),
+            device_name,
+            device_id,
+        )
+
+        return self.async_show_form(
+            step_id="configure_device_mode",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional("segment_mode", default=default_mode): vol.In(
+                        [SEGMENT_MODE_DISABLED, SEGMENT_MODE_GROUPED, SEGMENT_MODE_INDIVIDUAL]
+                    ),
+                }
+            ),
+            description_placeholders={
+                "device_name": device_name,
+                "device_id": device_id,
+            },
         )

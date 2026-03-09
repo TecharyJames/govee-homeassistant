@@ -33,7 +33,10 @@ from .const import (
     DOMAIN,
     KEY_IOT_CREDENTIALS,
     KEY_IOT_LOGIN_FAILED,
+    SEGMENT_MODE_GROUPED,
+    SEGMENT_MODE_INDIVIDUAL,
     SUFFIX_DIY_SCENE_SELECT,
+    SUFFIX_GROUPED_SEGMENT,
     SUFFIX_SCENE_SELECT,
     SUFFIX_SEGMENT,
 )
@@ -215,6 +218,28 @@ async def async_unload_entry(hass: HomeAssistant, entry: GoveeConfigEntry) -> bo
     return unload_ok
 
 
+def _extract_device_id_from_unique_id(
+    unique_id: str, known_device_ids: set[str]
+) -> str | None:
+    """Extract device_id from unique_id using longest prefix match.
+
+    All unique_ids follow: device_id + suffix pattern.
+    Device IDs vary in length: MAC (17 chars) or numeric/group (8 chars).
+    Use longest-first matching for reliability.
+
+    Args:
+        unique_id: Entity unique_id from registry.
+        known_device_ids: Set of device IDs from coordinator.
+
+    Returns:
+        Device ID if found, None otherwise.
+    """
+    for device_id in sorted(known_device_ids, key=len, reverse=True):
+        if unique_id.startswith(device_id):
+            return device_id
+    return None
+
+
 async def _async_cleanup_orphaned_entities(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -233,13 +258,13 @@ async def _async_cleanup_orphaned_entities(
 
     # Get current options
     options = entry.options
-    enable_segments = options.get(CONF_ENABLE_SEGMENTS, DEFAULT_ENABLE_SEGMENTS)
+    device_modes = options.get("segment_mode_by_device", {})
     enable_scenes = options.get(CONF_ENABLE_SCENES, DEFAULT_ENABLE_SCENES)
     enable_diy_scenes = options.get(CONF_ENABLE_DIY_SCENES, DEFAULT_ENABLE_DIY_SCENES)
 
     _LOGGER.debug(
-        "Orphan cleanup: enable_segments=%s, enable_scenes=%s, enable_diy_scenes=%s",
-        enable_segments,
+        "Orphan cleanup: device_modes=%s, enable_scenes=%s, enable_diy_scenes=%s",
+        len(device_modes),
         enable_scenes,
         enable_diy_scenes,
     )
@@ -265,19 +290,32 @@ async def _async_cleanup_orphaned_entities(
         should_remove = False
         removal_reason = ""
 
+        # Extract device_id from unique_id using longest-first matching
+        device_id = _extract_device_id_from_unique_id(unique_id, known_device_ids)
+
         # Check feature toggles first
-        if SUFFIX_SEGMENT in unique_id and not enable_segments:
-            should_remove = True
-            removal_reason = "segments disabled"
-        elif unique_id.endswith(SUFFIX_SCENE_SELECT) and not enable_scenes:
-            should_remove = True
-            removal_reason = "scenes disabled"
-        elif unique_id.endswith(SUFFIX_DIY_SCENE_SELECT) and not enable_diy_scenes:
-            should_remove = True
-            removal_reason = "DIY scenes disabled"
-        elif not any(unique_id.startswith(did) for did in known_device_ids):
-            # Every unique_id starts with the device_id, so a simple
-            # prefix check replaces all suffix-stripping logic
+        if device_id:
+            # Get per-device mode (default to individual)
+            segment_mode = device_modes.get(device_id, SEGMENT_MODE_INDIVIDUAL)
+            suffix = unique_id[len(device_id) :]
+
+            # Use explicit suffix matching to avoid false positives
+            if suffix == SUFFIX_GROUPED_SEGMENT:
+                if segment_mode != SEGMENT_MODE_GROUPED:
+                    should_remove = True
+                    removal_reason = "grouped segments disabled"
+            elif suffix.startswith(SUFFIX_SEGMENT):
+                if segment_mode != SEGMENT_MODE_INDIVIDUAL:
+                    should_remove = True
+                    removal_reason = "individual segments disabled"
+            elif unique_id.endswith(SUFFIX_SCENE_SELECT) and not enable_scenes:
+                should_remove = True
+                removal_reason = "scenes disabled"
+            elif unique_id.endswith(SUFFIX_DIY_SCENE_SELECT) and not enable_diy_scenes:
+                should_remove = True
+                removal_reason = "DIY scenes disabled"
+        else:
+            # Device not in coordinator (unknown device)
             should_remove = True
             removal_reason = "device not discovered"
 

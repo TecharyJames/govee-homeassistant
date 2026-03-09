@@ -41,7 +41,6 @@ from custom_components.govee.models.device import (
     INSTANCE_DREAMVIEW,
 )
 
-
 # ==============================================================================
 # RGBColor Tests
 # ==============================================================================
@@ -104,7 +103,9 @@ class TestGoveeCapability:
 
     def test_is_power(self):
         """Test power capability detection."""
-        cap = GoveeCapability(type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={})
+        cap = GoveeCapability(
+            type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={}
+        )
         assert cap.is_power is True
         assert cap.is_brightness is False
 
@@ -120,19 +121,25 @@ class TestGoveeCapability:
 
     def test_is_color_rgb(self):
         """Test RGB color capability detection."""
-        cap = GoveeCapability(type=CAPABILITY_COLOR_SETTING, instance=INSTANCE_COLOR_RGB, parameters={})
+        cap = GoveeCapability(
+            type=CAPABILITY_COLOR_SETTING, instance=INSTANCE_COLOR_RGB, parameters={}
+        )
         assert cap.is_color_rgb is True
         assert cap.is_color_temp is False
 
     def test_is_color_temp(self):
         """Test color temperature capability detection."""
-        cap = GoveeCapability(type=CAPABILITY_COLOR_SETTING, instance=INSTANCE_COLOR_TEMP, parameters={})
+        cap = GoveeCapability(
+            type=CAPABILITY_COLOR_SETTING, instance=INSTANCE_COLOR_TEMP, parameters={}
+        )
         assert cap.is_color_temp is True
         assert cap.is_color_rgb is False
 
     def test_is_scene(self):
         """Test scene capability detection."""
-        cap = GoveeCapability(type=CAPABILITY_DYNAMIC_SCENE, instance=INSTANCE_SCENE, parameters={})
+        cap = GoveeCapability(
+            type=CAPABILITY_DYNAMIC_SCENE, instance=INSTANCE_SCENE, parameters={}
+        )
         assert cap.is_scene is True
 
     def test_is_snapshot(self):
@@ -144,14 +151,18 @@ class TestGoveeCapability:
 
     def test_is_oscillation(self):
         """Test oscillation capability detection (fans)."""
-        cap = GoveeCapability(type=CAPABILITY_TOGGLE, instance=INSTANCE_OSCILLATION, parameters={})
+        cap = GoveeCapability(
+            type=CAPABILITY_TOGGLE, instance=INSTANCE_OSCILLATION, parameters={}
+        )
         assert cap.is_oscillation is True
         assert cap.is_toggle is True
         assert cap.is_night_light is False
 
     def test_is_work_mode(self):
         """Test work mode capability detection (fans)."""
-        cap = GoveeCapability(type=CAPABILITY_WORK_MODE, instance=INSTANCE_WORK_MODE, parameters={})
+        cap = GoveeCapability(
+            type=CAPABILITY_WORK_MODE, instance=INSTANCE_WORK_MODE, parameters={}
+        )
         assert cap.is_work_mode is True
 
     def test_is_hdmi_source(self):
@@ -186,7 +197,9 @@ class TestGoveeCapability:
 
     def test_immutable(self):
         """Test that GoveeCapability is immutable (frozen)."""
-        cap = GoveeCapability(type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={})
+        cap = GoveeCapability(
+            type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={}
+        )
         with pytest.raises(AttributeError):
             cap.type = "other"
 
@@ -334,6 +347,27 @@ class TestGoveeDevice:
         assert device.supports_power is True
         assert device.supports_oscillation is True
         assert device.supports_work_mode is True
+
+    def test_get_fan_speed_options_named(self, mock_fan_device):
+        """Test get_fan_speed_options with named sub-options (3-speed)."""
+        options = mock_fan_device.get_fan_speed_options()
+        gear_options = [o for o in options if o["work_mode"] == 1]
+        assert len(gear_options) == 3
+        assert gear_options[0] == {"name": "Low", "work_mode": 1, "mode_value": 1}
+        assert gear_options[1] == {"name": "Medium", "work_mode": 1, "mode_value": 2}
+        assert gear_options[2] == {"name": "High", "work_mode": 1, "mode_value": 3}
+
+    def test_get_fan_speed_options_unnamed(self, mock_fan_8speed_device):
+        """Test get_fan_speed_options with unnamed sub-options (H7101 8-speed)."""
+        options = mock_fan_8speed_device.get_fan_speed_options()
+        gear_options = [o for o in options if o["work_mode"] == 1]
+        assert len(gear_options) == 8
+        for i in range(1, 9):
+            assert gear_options[i - 1] == {
+                "name": f"Speed {i}",
+                "work_mode": 1,
+                "mode_value": i,
+            }
 
     def test_immutable(self, mock_light_device):
         """Test that GoveeDevice is immutable (frozen)."""
@@ -669,14 +703,161 @@ class TestGoveeDeviceState:
         assert state.active_diy_scene == "456"
         assert state.active_snapshot is None
 
-    def test_power_off_clears_snapshot(self):
-        """Test turning power off clears snapshot."""
+    def test_active_scene_name_set_with_scene(self):
+        """Test active_scene_name is set alongside active_scene."""
         state = GoveeDeviceState.create_empty("test_id")
-        state.active_snapshot = "789"
-        state.power_state = True
+        state.apply_optimistic_scene("123", "Sunrise")
+        assert state.active_scene == "123"
+        assert state.active_scene_name == "Sunrise"
+
+    def test_active_scene_name_preserved_on_power_off(self):
+        """Test active_scene_name is preserved when turning off."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.apply_optimistic_scene("123", "Sunrise")
         state.apply_optimistic_power(False)
-        assert state.power_state is False
-        assert state.active_snapshot is None
+        assert state.active_scene == "123"
+        assert state.active_scene_name == "Sunrise"
+
+    def test_active_scene_name_cleared_on_color_change(self):
+        """Test active_scene_name is cleared when setting RGB color."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.apply_optimistic_scene("123", "Sunrise")
+        state.apply_optimistic_color(RGBColor(255, 0, 0))
+        assert state.active_scene is None
+        assert state.active_scene_name is None
+
+    def test_active_scene_name_cleared_on_color_temp_change(self):
+        """Test active_scene_name is cleared when setting color temp."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.apply_optimistic_scene("123", "Sunrise")
+        state.apply_optimistic_color_temp(4000)
+        assert state.active_scene is None
+        assert state.active_scene_name is None
+
+    def test_scene_clears_color_and_color_temp(self):
+        """Test activating scene clears stale color and color temp.
+
+        Scenes run dynamic patterns so the previous RGB/color-temp is
+        misleading.  Clearing lets the light card show on + brightness only.
+        """
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color = RGBColor(255, 0, 0)
+        state.color_temp_kelvin = 4000
+        state.apply_optimistic_scene("123", "Sunrise")
+        assert state.active_scene == "123"
+        assert state.color is None
+        assert state.color_temp_kelvin is None
+
+    def test_active_scene_name_not_cleared_by_brightness(self):
+        """Test brightness change does NOT clear scene state."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.apply_optimistic_scene("123", "Sunrise")
+        state.apply_optimistic_brightness(50)
+        assert state.active_scene == "123"
+        assert state.active_scene_name == "Sunrise"
+
+    def test_active_scene_name_cleared_by_music_mode(self):
+        """Test music mode clears active_scene_name (mutual exclusion)."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.apply_optimistic_scene("123", "Sunrise")
+        state.apply_optimistic_music_mode(True)
+        assert state.active_scene is None
+        assert state.active_scene_name is None
+
+    def test_active_scene_name_cleared_by_music_mode_struct(self):
+        """Test STRUCT music mode clears active_scene_name (mutual exclusion)."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.apply_optimistic_scene("123", "Sunrise")
+        state.apply_optimistic_music_mode_struct(5, 75, "Spectrum")
+        assert state.active_scene is None
+        assert state.active_scene_name is None
+
+    def test_active_scene_name_cleared_by_dreamview(self):
+        """Test DreamView clears active_scene_name (mutual exclusion)."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.apply_optimistic_scene("123", "Sunrise")
+        state.apply_optimistic_dreamview(True)
+        assert state.active_scene is None
+        assert state.active_scene_name is None
+
+    def test_active_scene_name_cleared_by_diy_scene(self):
+        """Test DIY scene clears active_scene_name (mutual exclusion)."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.apply_optimistic_scene("123", "Sunrise")
+        state.apply_optimistic_diy_scene("456")
+        assert state.active_scene is None
+        assert state.active_scene_name is None
+
+    def test_scene_saves_last_color(self):
+        """Test activating a scene saves the current color for later restore."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color = RGBColor(255, 0, 0)
+        state.apply_optimistic_scene("123", "Sunrise")
+        assert state.last_color == RGBColor(255, 0, 0)
+        assert state.last_color_temp_kelvin is None
+        assert state.color is None
+
+    def test_scene_saves_last_color_temp(self):
+        """Test activating a scene saves the current color_temp for later restore."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color_temp_kelvin = 4000
+        state.apply_optimistic_scene("123", "Sunrise")
+        assert state.last_color_temp_kelvin == 4000
+        assert state.last_color is None
+        assert state.color_temp_kelvin is None
+
+    def test_scene_chain_preserves_first_color(self):
+        """Test scene A → scene B doesn't overwrite the saved color from before A."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color = RGBColor(0, 255, 0)
+        state.apply_optimistic_scene("1", "Scene A")
+        assert state.last_color == RGBColor(0, 255, 0)
+        # Scene B: color is now None, so last_color should NOT be overwritten
+        state.apply_optimistic_scene("2", "Scene B")
+        assert state.last_color == RGBColor(0, 255, 0)
+
+    def test_diy_scene_saves_last_color(self):
+        """Test activating a DIY scene saves the current color for later restore."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color = RGBColor(0, 0, 255)
+        state.apply_optimistic_diy_scene("456")
+        assert state.last_color == RGBColor(0, 0, 255)
+        assert state.last_color_temp_kelvin is None
+
+    def test_diy_scene_saves_last_color_temp(self):
+        """Test activating a DIY scene saves the current color_temp."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color_temp_kelvin = 5000
+        state.apply_optimistic_diy_scene("456")
+        assert state.last_color_temp_kelvin == 5000
+        assert state.last_color is None
+
+    def test_diy_scene_chain_preserves_first_color(self):
+        """Test DIY scene A → DIY scene B preserves original saved color."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color = RGBColor(128, 128, 0)
+        state.apply_optimistic_diy_scene("1")
+        assert state.last_color == RGBColor(128, 128, 0)
+        state.apply_optimistic_diy_scene("2")
+        assert state.last_color == RGBColor(128, 128, 0)
+
+    def test_scene_does_not_save_black(self):
+        """Test that RGBColor(0,0,0) is not saved as last_color.
+
+        The API returns colorRgb=0 when a scene is running, which is not a
+        meaningful color to restore.
+        """
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color = RGBColor(0, 0, 0)
+        state.apply_optimistic_scene("123", "Sunrise")
+        assert state.last_color is None
+
+    def test_diy_scene_does_not_save_black(self):
+        """Test that RGBColor(0,0,0) is not saved as last_color for DIY scenes."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color = RGBColor(0, 0, 0)
+        state.apply_optimistic_diy_scene("456")
+        assert state.last_color is None
 
 
 # ==============================================================================

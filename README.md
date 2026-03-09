@@ -28,7 +28,7 @@ Ever wanted your Govee lights to actually *talk* to Home Assistant? This integra
 
 - **Full light control** — brightness, RGB colors, color temp, the works
 - **Scene magic** — your Govee scenes become HA scenes
-- **RGBIC segment control** — paint each segment a different color
+- **RGBIC segment control** — paint each segment a different color OR control all segments together as one
 - **Real-time sync** — optional MQTT for instant updates (bye-bye polling lag)
 
 ---
@@ -60,9 +60,56 @@ Enter your API key. Want instant updates? Add your Govee email/password for MQTT
 | **LED Lights & Strips** | On/off, brightness, RGB, color temp |
 | **RGBIC Strips** | All the above + per-segment colors |
 | **Fans** | On/off, speed (Low/Medium/High), oscillation, preset modes |
+| **Heaters** | On/off, target temperature (16-35°C), fan speed control |
+| **Air Purifiers** | On/off, mode selection (Sleep/Low/High/Custom) |
 | **HDMI Sync Boxes** | On/off, HDMI input selection (1-4) |
 
 > **Note:** Cloud-enabled devices only. Bluetooth-only devices need a different integration.
+
+---
+
+## RGBIC Segment Control
+
+For devices with RGB segments (like LED strips), you can choose how to control them globally or per-device:
+
+### Segment Control Modes
+
+| Mode | Use Case |
+|------|----------|
+| **Individual Segments** | Control each segment separately with different colors (default) |
+| **Grouped Segments** | Control all segments together as a single light — perfect for synchronized effects |
+| **Disabled** | Hide all segment entities if you don't need them |
+
+### Global vs Per-Device Configuration
+
+You can configure segment control in two ways:
+
+1. **Global Setting** — Apply one mode to all RGBIC devices
+   - In **Configure**, set "Global Segment Control Mode"
+   - All devices without per-device settings use this mode
+
+2. **Per-Device Settings** (NEW) — Different modes for different devices
+   - In **Configure**, select which devices to customize
+   - Set individual modes for each device (e.g., strips as individual, spotlights as grouped)
+   - Devices not configured per-device fall back to the global setting
+
+### How to Configure
+
+**To set up segment control:**
+
+1. Go to **Settings** → **Devices & Services** → **Govee** → **Configure**
+2. Set your **Global Segment Control Mode** (fallback for all devices)
+3. If you have RGBIC devices, you'll see additional steps:
+   - Select which devices to customize with per-device settings
+   - Set individual modes for each selected device
+4. Save — entities are automatically created/removed based on your selections
+
+**Example scenario:**
+- Global mode: Individual segments (default)
+- Customize per-device:
+  - LED Strip A (living room): Individual segments
+  - LED Strip B (kitchen): Grouped segments (for synced effects)
+  - Spotlight (bedroom): Disabled (don't need segment control)
 
 ---
 

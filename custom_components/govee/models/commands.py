@@ -18,6 +18,7 @@ from .device import (
     CAPABILITY_ON_OFF,
     CAPABILITY_RANGE,
     CAPABILITY_SEGMENT_COLOR,
+    CAPABILITY_TEMPERATURE_SETTING,
     CAPABILITY_TOGGLE,
     CAPABILITY_WORK_MODE,
     INSTANCE_BRIGHTNESS,
@@ -32,6 +33,7 @@ from .device import (
     INSTANCE_SCENE,
     INSTANCE_SEGMENT_COLOR,
     INSTANCE_SNAPSHOT,
+    INSTANCE_TARGET_TEMPERATURE,
     INSTANCE_WORK_MODE,
 )
 from .state import RGBColor
@@ -109,6 +111,28 @@ class BrightnessCommand(DeviceCommand):
 
     def get_value(self) -> int:
         return self.brightness
+
+
+@dataclass(frozen=True)
+class RangeCommand(DeviceCommand):
+    """Generic command to set any range-type capability.
+
+    Used for range-based controls like temperature, fan speed, etc.
+    """
+
+    range_instance: str  # e.g., "temperature", "fanSpeed"
+    value: int  # Numeric value within device range
+
+    @property
+    def capability_type(self) -> str:
+        return CAPABILITY_RANGE
+
+    @property
+    def instance(self) -> str:
+        return self.range_instance
+
+    def get_value(self) -> int:
+        return self.value
 
 
 @dataclass(frozen=True)
@@ -383,3 +407,26 @@ class MusicModeCommand(DeviceCommand):
         if self.rgb is not None and self.auto_color == 0:
             value["rgb"] = self.rgb
         return value
+
+
+@dataclass(frozen=True)
+class TemperatureSettingCommand(DeviceCommand):
+    """Command to set heater target temperature via STRUCT payload.
+
+    Heaters use the temperature_setting capability with a STRUCT value
+    containing temperature and unit fields.
+    """
+
+    temperature: int
+    unit: str = "Celsius"
+
+    @property
+    def capability_type(self) -> str:
+        return CAPABILITY_TEMPERATURE_SETTING
+
+    @property
+    def instance(self) -> str:
+        return INSTANCE_TARGET_TEMPERATURE
+
+    def get_value(self) -> dict[str, Any]:
+        return {"temperature": self.temperature, "unit": self.unit}

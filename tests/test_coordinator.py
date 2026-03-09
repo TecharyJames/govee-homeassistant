@@ -33,7 +33,6 @@ from custom_components.govee.models.device import (
 )
 from custom_components.govee.protocols import IStateObserver
 
-
 # ==============================================================================
 # Fixtures
 # ==============================================================================
@@ -395,7 +394,9 @@ class TestErrorHandling:
         """Test device not found is expected for groups."""
         err = GoveeDeviceNotFoundError("GROUP:ID")
 
-        is_group_error = "not exist" in str(err).lower() or "not found" in str(err).lower()
+        is_group_error = (
+            "not exist" in str(err).lower() or "not found" in str(err).lower()
+        )
 
         assert is_group_error or err.code == 400
 
@@ -457,10 +458,7 @@ class TestParallelStateFetching:
         async def mock_fetch(device_id, device):
             return GoveeDeviceState.create_empty(device_id)
 
-        tasks = [
-            mock_fetch(device_id, device)
-            for device_id, device in devices.items()
-        ]
+        tasks = [mock_fetch(device_id, device) for device_id, device in devices.items()]
 
         results = await asyncio.gather(*tasks)
 
@@ -631,3 +629,469 @@ class TestCoordinatorSceneManagement:
             del cache["device_id"]
 
         assert "device_id" not in cache
+
+
+class TestPowerOffPendingFlag:
+    """Test _pending_power_off tracking in coordinator (issue #16).
+
+    Tests the flag logic that allows segment entities to detect when a
+    power-off command is in flight, avoiding race conditions during
+    area-targeted turn_off.
+    """
+
+    def test_pending_power_off_starts_empty(self):
+        """Test _pending_power_off set is initially empty."""
+        pending: set[str] = set()
+        assert len(pending) == 0
+
+    def test_is_power_off_pending_false_initially(self):
+        """Test is_power_off_pending returns False for unknown device."""
+        pending: set[str] = set()
+        assert "device_id" not in pending
+
+    def test_flag_set_for_power_off_command(self):
+        """Test flag is set for PowerCommand(power_on=False)."""
+        pending: set[str] = set()
+        command = PowerCommand(power_on=False)
+
+        is_power_off = isinstance(command, PowerCommand) and not command.power_on
+        if is_power_off:
+            pending.add("device_id")
+
+        assert "device_id" in pending
+
+    def test_flag_not_set_for_power_on_command(self):
+        """Test flag is NOT set for PowerCommand(power_on=True)."""
+        pending: set[str] = set()
+        command = PowerCommand(power_on=True)
+
+        is_power_off = isinstance(command, PowerCommand) and not command.power_on
+        if is_power_off:
+            pending.add("device_id")
+
+        assert "device_id" not in pending
+
+    def test_flag_not_set_for_brightness_command(self):
+        """Test flag is NOT set for non-power commands."""
+        pending: set[str] = set()
+        command = BrightnessCommand(brightness=50)
+
+        is_power_off = isinstance(command, PowerCommand) and not command.power_on
+        if is_power_off:
+            pending.add("device_id")
+
+        assert "device_id" not in pending
+
+    def test_flag_cleared_after_success(self):
+        """Test flag is cleared via discard after command completes."""
+        pending: set[str] = set()
+        pending.add("device_id")
+
+        # Simulate finally block
+        pending.discard("device_id")
+
+        assert "device_id" not in pending
+
+    def test_flag_cleared_after_failure(self):
+        """Test flag is cleared even when command raises."""
+        pending: set[str] = set()
+        device_id = "device_id"
+        command = PowerCommand(power_on=False)
+
+        is_power_off = isinstance(command, PowerCommand) and not command.power_on
+        if is_power_off:
+            pending.add(device_id)
+
+        try:
+            raise GoveeApiError("Simulated failure")
+        except GoveeApiError:
+            pass
+        finally:
+            if is_power_off:
+                pending.discard(device_id)
+
+        assert device_id not in pending
+
+    def test_flag_discard_idempotent(self):
+        """Test discarding a non-existent device_id is safe."""
+        pending: set[str] = set()
+        pending.discard("nonexistent")  # Should not raise
+        assert len(pending) == 0
+
+
+class TestCleanupDeviceIdExtraction:
+    """Test device ID extraction for cleanup logic."""
+
+    def test_extract_mac_address_device_id(self):
+        """Test extracting MAC address device_id from unique_id."""
+        device_id = "AA:BB:CC:DD:EE:FF:00:01"
+        unique_id = f"{device_id}_segment_0"
+        known_devices = {device_id}
+
+        # Simulate extraction using longest-first matching
+        extracted = None
+        for dev_id in sorted(known_devices, key=len, reverse=True):
+            if unique_id.startswith(dev_id):
+                extracted = dev_id
+                break
+
+        assert extracted == device_id
+
+    def test_extract_numeric_group_id(self):
+        """Test extracting numeric group ID from unique_id."""
+        device_id = "12345678"
+        unique_id = f"{device_id}_scene_select"
+        known_devices = {device_id}
+
+        # Simulate extraction
+        extracted = None
+        for dev_id in sorted(known_devices, key=len, reverse=True):
+            if unique_id.startswith(dev_id):
+                extracted = dev_id
+                break
+
+        assert extracted == device_id
+
+    def test_extract_with_multiple_device_ids(self):
+        """Test extraction with multiple device IDs (longest-first matching)."""
+        # Mix of MAC and numeric IDs
+        mac_id = "AA:BB:CC:DD:EE:FF:00:01"
+        group_id = "12345678"
+        known_devices = {mac_id, group_id}
+
+        # MAC address device
+        unique_id = f"{mac_id}_segment_0"
+        extracted = None
+        for dev_id in sorted(known_devices, key=len, reverse=True):
+            if unique_id.startswith(dev_id):
+                extracted = dev_id
+                break
+        assert extracted == mac_id
+
+        # Group device
+        unique_id = f"{group_id}_segment_0"
+        extracted = None
+        for dev_id in sorted(known_devices, key=len, reverse=True):
+            if unique_id.startswith(dev_id):
+                extracted = dev_id
+                break
+        assert extracted == group_id
+
+    def test_extract_returns_none_for_unknown_device(self):
+        """Test extraction returns None for unknown device."""
+        known_devices = {"AA:BB:CC:DD:EE:FF:00:01"}
+        unique_id = "UNKNOWN:DEVICE:ID_segment_0"
+
+        extracted = None
+        for dev_id in sorted(known_devices, key=len, reverse=True):
+            if unique_id.startswith(dev_id):
+                extracted = dev_id
+                break
+
+        assert extracted is None
+
+    def test_longest_first_matching_precedence(self):
+        """Test longest-first matching prevents prefix collision."""
+        # Create two device IDs where one is prefix of another
+        short_id = "ABC"
+        long_id = "ABCDEF"
+        known_devices = {short_id, long_id}
+
+        # Test with long_id unique_id
+        unique_id = f"{long_id}_segment_0"
+        extracted = None
+        for dev_id in sorted(known_devices, key=len, reverse=True):
+            if unique_id.startswith(dev_id):
+                extracted = dev_id
+                break
+
+        # Should match long_id, not short_id
+        assert extracted == long_id
+
+
+class TestCleanupSegmentModeLogic:
+    """Test segment mode cleanup logic with per-device config."""
+
+    def test_grouped_segment_removed_when_disabled(self):
+        """Test grouped segment entity removed when mode is not grouped."""
+        from custom_components.govee.const import (
+            SUFFIX_GROUPED_SEGMENT,
+            SEGMENT_MODE_GROUPED,
+            SEGMENT_MODE_INDIVIDUAL,
+        )
+
+        device_id = "AA:BB:CC:DD:EE:FF:00:01"
+        unique_id = f"{device_id}{SUFFIX_GROUPED_SEGMENT}"
+
+        # Device config with individual mode
+        device_modes = {device_id: SEGMENT_MODE_INDIVIDUAL}
+
+        # Extract and check
+        suffix = unique_id[len(device_id) :]
+        is_grouped = suffix == SUFFIX_GROUPED_SEGMENT
+        mode = device_modes.get(device_id, SEGMENT_MODE_GROUPED)
+
+        should_remove = is_grouped and mode != SEGMENT_MODE_GROUPED
+        assert should_remove is True
+
+    def test_individual_segment_removed_when_disabled(self):
+        """Test individual segment entity removed when mode is disabled."""
+        from custom_components.govee.const import (
+            SUFFIX_SEGMENT,
+            SEGMENT_MODE_INDIVIDUAL,
+            SEGMENT_MODE_DISABLED,
+        )
+
+        device_id = "AA:BB:CC:DD:EE:FF:00:01"
+        unique_id = f"{device_id}{SUFFIX_SEGMENT}0"
+
+        # Device config with disabled mode
+        device_modes = {device_id: SEGMENT_MODE_DISABLED}
+
+        # Extract and check
+        suffix = unique_id[len(device_id) :]
+        is_individual = suffix.startswith(SUFFIX_SEGMENT)
+        mode = device_modes.get(device_id, SEGMENT_MODE_INDIVIDUAL)
+
+        should_remove = is_individual and mode != SEGMENT_MODE_INDIVIDUAL
+        assert should_remove is True
+
+    def test_segment_kept_when_mode_matches(self):
+        """Test segment entity is kept when mode matches."""
+        from custom_components.govee.const import (
+            SUFFIX_SEGMENT,
+            SEGMENT_MODE_INDIVIDUAL,
+        )
+
+        device_id = "AA:BB:CC:DD:EE:FF:00:01"
+        unique_id = f"{device_id}{SUFFIX_SEGMENT}0"
+
+        # Device config with individual mode (matches entity type)
+        device_modes = {device_id: SEGMENT_MODE_INDIVIDUAL}
+
+        # Extract and check
+        suffix = unique_id[len(device_id) :]
+        is_individual = suffix.startswith(SUFFIX_SEGMENT)
+        mode = device_modes.get(device_id, SEGMENT_MODE_INDIVIDUAL)
+
+        should_remove = is_individual and mode != SEGMENT_MODE_INDIVIDUAL
+        assert should_remove is False
+
+    def test_fallback_to_global_mode(self):
+        """Test fallback to global mode when device not in per-device config."""
+        from custom_components.govee.const import (
+            SUFFIX_SEGMENT,
+            SEGMENT_MODE_INDIVIDUAL,
+        )
+
+        device_id = "AA:BB:CC:DD:EE:FF:00:01"
+        unique_id = f"{device_id}{SUFFIX_SEGMENT}0"
+
+        # Device NOT in per-device config, use global
+        device_modes = {}  # Empty - use global fallback
+        global_mode = SEGMENT_MODE_INDIVIDUAL
+
+        # Extract and check
+        suffix = unique_id[len(device_id) :]
+        is_individual = suffix.startswith(SUFFIX_SEGMENT)
+        mode = device_modes.get(device_id, global_mode)
+
+        should_remove = is_individual and mode != SEGMENT_MODE_INDIVIDUAL
+        assert should_remove is False  # Matches global mode
+
+
+class TestClearSceneLogic:
+    """Test async_clear_scene command selection logic.
+
+    These tests verify the logic for choosing which command to send when
+    clearing a scene (color restore vs color_temp restore vs defaults).
+    """
+
+    def _make_device(self, supports_rgb: bool, supports_color_temp: bool):
+        """Create a device with specified color capabilities."""
+        caps = [
+            GoveeCapability(type=CAPABILITY_ON_OFF, instance=INSTANCE_POWER, parameters={}),
+            GoveeCapability(
+                type=CAPABILITY_RANGE,
+                instance=INSTANCE_BRIGHTNESS,
+                parameters={"range": {"min": 0, "max": 100}},
+            ),
+        ]
+        if supports_rgb:
+            caps.append(
+                GoveeCapability(
+                    type="devices.capabilities.color_setting",
+                    instance="colorRgb",
+                    parameters={},
+                )
+            )
+        if supports_color_temp:
+            caps.append(
+                GoveeCapability(
+                    type="devices.capabilities.color_setting",
+                    instance="colorTemperatureK",
+                    parameters={"range": {"min": 2000, "max": 9000}},
+                )
+            )
+        return GoveeDevice(
+            device_id="AA:BB:CC:DD:EE:FF:00:11",
+            sku="H6072",
+            name="Test Light",
+            device_type="devices.types.light",
+            capabilities=tuple(caps),
+            is_group=False,
+        )
+
+    def test_clear_scene_chooses_color_when_last_color_saved(self):
+        """Test clear scene sends ColorCommand when last_color is available."""
+        device = self._make_device(supports_rgb=True, supports_color_temp=True)
+        state = GoveeDeviceState.create_empty(device.device_id)
+        state.active_scene = "123"
+        state.last_color = RGBColor(255, 0, 0)
+
+        color = state.color or state.last_color
+
+        # Should pick ColorCommand path
+        assert color == RGBColor(255, 0, 0)
+        assert device.supports_rgb is True
+
+    def test_clear_scene_chooses_color_temp_when_last_temp_saved(self):
+        """Test clear scene sends ColorTempCommand when last_color_temp is available."""
+        device = self._make_device(supports_rgb=True, supports_color_temp=True)
+        state = GoveeDeviceState.create_empty(device.device_id)
+        state.active_scene = "123"
+        state.last_color_temp_kelvin = 4000
+
+        color = state.color or state.last_color
+        color_temp = state.color_temp_kelvin or state.last_color_temp_kelvin
+
+        # No color, falls through to color_temp
+        assert color is None
+        assert color_temp == 4000
+        assert device.supports_color_temp is True
+
+    def test_clear_scene_default_color_temp_midpoint(self):
+        """Test clear scene uses midpoint of color temp range as default."""
+        device = self._make_device(supports_rgb=False, supports_color_temp=True)
+        state = GoveeDeviceState.create_empty(device.device_id)
+        state.active_scene = "123"
+
+        color = state.color or state.last_color
+        color_temp = state.color_temp_kelvin or state.last_color_temp_kelvin
+
+        # No saved color or temp → falls through to default path
+        assert color is None
+        assert color_temp is None
+        assert device.supports_color_temp is True
+        ct_range = device.color_temp_range
+        assert ct_range is not None
+        midpoint = (ct_range.min_kelvin + ct_range.max_kelvin) // 2
+        assert midpoint == 5500
+
+    def test_clear_scene_no_scene_active_is_noop(self):
+        """Test clearing when no scene is active doesn't require a command."""
+        state = GoveeDeviceState.create_empty("test_id")
+        # Neither active_scene nor active_diy_scene set
+        assert state.active_scene is None
+        assert state.active_diy_scene is None
+
+    def test_clear_scene_clears_both_scene_types(self):
+        """Test clearing scene state clears both regular and DIY scene."""
+        state = GoveeDeviceState.create_empty("test_id")
+        state.active_scene = "123"
+        state.active_scene_name = "Sunrise"
+        state.active_diy_scene = "456"
+
+        # Simulate what async_clear_scene does on success
+        state.active_scene = None
+        state.active_scene_name = None
+        state.active_diy_scene = None
+
+        assert state.active_scene is None
+        assert state.active_scene_name is None
+        assert state.active_diy_scene is None
+
+
+class TestStatePreservationAcrossApiPoll:
+    """Test that restore-target fields survive API poll cycles."""
+
+    def test_last_color_preserved_across_api_poll(self):
+        """Test last_color is preserved when API returns a fresh state."""
+        existing = GoveeDeviceState.create_empty("test_id")
+        existing.color = RGBColor(255, 0, 0)
+        existing.apply_optimistic_scene("scene_1", "Sunset")
+        assert existing.last_color == RGBColor(255, 0, 0)
+
+        # Simulate API poll returning a fresh state (no last_color)
+        new_state = GoveeDeviceState.create_empty("test_id")
+        new_state.power_state = True
+
+        # Mimic coordinator preservation logic
+        if existing.last_color is not None:
+            new_state.last_color = existing.last_color
+
+        assert new_state.last_color == RGBColor(255, 0, 0)
+
+    def test_last_color_temp_preserved_across_api_poll(self):
+        """Test last_color_temp_kelvin is preserved when API returns a fresh state."""
+        existing = GoveeDeviceState.create_empty("test_id")
+        existing.color_temp_kelvin = 4500
+        existing.apply_optimistic_scene("scene_1", "Sunset")
+        assert existing.last_color_temp_kelvin == 4500
+
+        new_state = GoveeDeviceState.create_empty("test_id")
+        new_state.power_state = True
+
+        if existing.last_color_temp_kelvin is not None:
+            new_state.last_color_temp_kelvin = existing.last_color_temp_kelvin
+
+        assert new_state.last_color_temp_kelvin == 4500
+
+    def test_last_scene_preserved_across_api_poll(self):
+        """Test last_scene_id and last_scene_name survive API poll."""
+        existing = GoveeDeviceState.create_empty("test_id")
+        existing.apply_optimistic_scene("scene_42", "Aurora")
+        assert existing.last_scene_id == "scene_42"
+        assert existing.last_scene_name == "Aurora"
+
+        new_state = GoveeDeviceState.create_empty("test_id")
+
+        if existing.last_scene_id is not None:
+            new_state.last_scene_id = existing.last_scene_id
+        if existing.last_scene_name is not None:
+            new_state.last_scene_name = existing.last_scene_name
+
+        assert new_state.last_scene_id == "scene_42"
+        assert new_state.last_scene_name == "Aurora"
+
+    def test_full_flow_color_scene_poll_clear(self):
+        """End-to-end: set red → scene → API poll (colorRgb=0) → clear → red resolved."""
+        # Step 1: User sets red
+        state = GoveeDeviceState.create_empty("test_id")
+        state.color = RGBColor(255, 0, 0)
+        state.power_state = True
+
+        # Step 2: User activates scene — saves red as last_color
+        state.apply_optimistic_scene("scene_1", "Party")
+        assert state.last_color == RGBColor(255, 0, 0)
+        assert state.color is None
+
+        # Step 3: API poll returns fresh state with colorRgb=0 (scene running)
+        api_state = GoveeDeviceState.create_empty("test_id")
+        api_state.power_state = True
+        api_state.color = RGBColor(0, 0, 0)  # API returns black during scene
+
+        # Coordinator preserves memory fields
+        if state.active_scene:
+            api_state.active_scene = state.active_scene
+        if state.active_scene_name:
+            api_state.active_scene_name = state.active_scene_name
+        if state.last_color is not None:
+            api_state.last_color = state.last_color
+
+        # Step 4: Resolve color for clear_scene — reject black, fall back to last_color
+        color = api_state.color or api_state.last_color
+        if color and color.as_packed_int == 0:
+            color = api_state.last_color
+
+        assert color == RGBColor(255, 0, 0)

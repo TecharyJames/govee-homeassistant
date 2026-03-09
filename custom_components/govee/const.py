@@ -16,6 +16,7 @@ CONF_ENABLE_SCENES: Final = "enable_scenes"
 CONF_ENABLE_DIY_SCENES: Final = "enable_diy_scenes"
 CONF_ENABLE_SNAPSHOTS: Final = "enable_snapshots"
 CONF_ENABLE_SEGMENTS: Final = "enable_segments"
+CONF_SEGMENT_MODE: Final = "segment_mode"
 
 # Defaults
 DEFAULT_POLL_INTERVAL: Final = 60  # seconds
@@ -24,6 +25,12 @@ DEFAULT_ENABLE_SCENES: Final = True
 DEFAULT_ENABLE_DIY_SCENES: Final = True
 DEFAULT_ENABLE_SNAPSHOTS: Final = True
 DEFAULT_ENABLE_SEGMENTS: Final = True
+DEFAULT_SEGMENT_MODE: Final = "individual"  # "disabled", "grouped", or "individual"
+
+# Segment mode options
+SEGMENT_MODE_DISABLED: Final = "disabled"
+SEGMENT_MODE_GROUPED: Final = "grouped"
+SEGMENT_MODE_INDIVIDUAL: Final = "individual"
 
 # Config entry version (fresh start)
 CONFIG_VERSION: Final = 1
@@ -35,6 +42,7 @@ KEY_IOT_LOGIN_FAILED: Final = "iot_login_failed"
 # Entity unique_id suffixes
 # Used in entity creation and orphan cleanup to keep patterns consistent
 SUFFIX_SEGMENT: Final = "_segment_"
+SUFFIX_GROUPED_SEGMENT: Final = "_grouped_segments"
 SUFFIX_SCENE_SELECT: Final = "_scene_select"
 SUFFIX_DIY_SCENE_SELECT: Final = "_diy_scene_select"
 SUFFIX_DIY_STYLE_SELECT: Final = "_diy_style_select"
@@ -46,3 +54,6 @@ SUFFIX_NIGHT_LIGHT: Final = "_night_light"
 SUFFIX_MUSIC_MODE: Final = "_music_mode"
 SUFFIX_MUSIC_SENSITIVITY: Final = "_music_sensitivity"
 SUFFIX_DREAMVIEW: Final = "_dreamview"
+SUFFIX_HEATER_TEMPERATURE: Final = "_heater_temperature"
+SUFFIX_HEATER_FAN_SPEED: Final = "_heater_fan_speed"
+SUFFIX_PURIFIER_MODE_SELECT: Final = "_purifier_mode_select"

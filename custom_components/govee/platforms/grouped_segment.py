@@ -1,7 +1,6 @@
-"""Segment light entities for RGBIC devices.
+"""Grouped segment light entity for RGBIC devices.
 
-Each segment of an RGBIC LED strip is exposed as a separate light entity,
-following the WLED pattern for segment control.
+Controls all segments of an RGBIC LED strip as a single grouped light entity.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from homeassistant.components.light import (  # type: ignore[attr-defined]
 )
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from ..const import SUFFIX_SEGMENT
+from ..const import SUFFIX_GROUPED_SEGMENT
 from ..coordinator import GoveeCoordinator
 from ..entity import GoveeEntity
 from ..models import GoveeDevice, RGBColor, SegmentColorCommand
@@ -26,10 +25,11 @@ from ..models import GoveeDevice, RGBColor, SegmentColorCommand
 _LOGGER = logging.getLogger(__name__)
 
 
-class GoveeSegmentEntity(GoveeEntity, LightEntity, RestoreEntity):
-    """Govee segment light entity.
+class GoveeGroupedSegmentEntity(GoveeEntity, LightEntity, RestoreEntity):
+    """Govee grouped segment light entity.
 
-    Represents a single segment of an RGBIC LED strip.
+    Controls all segments of an RGBIC LED strip as a single grouped light.
+    Sends a command to all segments at once for synchronized control.
 
     API Limitation: Govee API returns empty strings for segment colors.
     We use purely optimistic/local state that persists via RestoreEntity.
@@ -37,7 +37,7 @@ class GoveeSegmentEntity(GoveeEntity, LightEntity, RestoreEntity):
     to prevent API responses from overwriting local state.
     """
 
-    _attr_translation_key = "govee_segment"
+    _attr_translation_key = "govee_grouped_segment"
     _attr_supported_color_modes = {ColorMode.RGB}
     _attr_color_mode = ColorMode.RGB
 
@@ -45,28 +45,28 @@ class GoveeSegmentEntity(GoveeEntity, LightEntity, RestoreEntity):
         self,
         coordinator: GoveeCoordinator,
         device: GoveeDevice,
-        segment_index: int,
     ) -> None:
-        """Initialize the segment entity.
+        """Initialize the grouped segment entity.
 
         Args:
             coordinator: Govee data coordinator.
-            device: Device this segment belongs to.
-            segment_index: Zero-based segment index.
+            device: Device with segments to control.
         """
         super().__init__(coordinator, device)
-        self._segment_index = segment_index
+        self._device = device
 
-        # Unique ID combines device and segment
-        self._attr_unique_id = f"{device.device_id}{SUFFIX_SEGMENT}{segment_index}"
+        # Segment indices for all segments (0 to segment_count-1)
+        self._segment_indices = tuple(range(device.segment_count))
 
-        # Segment name with 1-based index for user display
-        self._attr_name = f"Segment {segment_index + 1}"
+        # Unique ID for grouped segments
+        self._attr_unique_id = f"{device.device_id}{SUFFIX_GROUPED_SEGMENT}"
+
+        # Name for grouped segment control
+        self._attr_name = "Segments"
 
         # Translation placeholders
         self._attr_translation_placeholders = {
             "device_name": device.name,
-            "segment_index": str(segment_index + 1),
         }
 
         # Optimistic state (API doesn't return per-segment state)
@@ -78,14 +78,14 @@ class GoveeSegmentEntity(GoveeEntity, LightEntity, RestoreEntity):
     def available(self) -> bool:
         """Return True if entity is available.
 
-        Segments don't depend on coordinator state updates.
+        Grouped segments don't depend on coordinator state updates.
         Just check the coordinator is healthy.
         """
         return self.coordinator.last_update_success
 
     @property
     def is_on(self) -> bool:
-        """Return True if segment is on."""
+        """Return True if segments are on."""
         return self._is_on
 
     @property
@@ -99,7 +99,7 @@ class GoveeSegmentEntity(GoveeEntity, LightEntity, RestoreEntity):
         return self._rgb_color
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the segment on with optional parameters."""
+        """Turn the segments on with optional parameters."""
         # Update brightness if provided
         if ATTR_BRIGHTNESS in kwargs:
             self._brightness = kwargs[ATTR_BRIGHTNESS]
@@ -108,12 +108,12 @@ class GoveeSegmentEntity(GoveeEntity, LightEntity, RestoreEntity):
         if ATTR_RGB_COLOR in kwargs:
             self._rgb_color = kwargs[ATTR_RGB_COLOR]
 
-        # Create segment color command
+        # Create segment color command with all segment indices
         r, g, b = self._rgb_color
         color = RGBColor(r=r, g=g, b=b)
 
         command = SegmentColorCommand(
-            segment_indices=(self._segment_index,),
+            segment_indices=self._segment_indices,
             color=color,
         )
 
@@ -126,7 +126,7 @@ class GoveeSegmentEntity(GoveeEntity, LightEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        """Turn the segment off (set to black).
+        """Turn the segments off (set to black).
 
         Skips the API call if a power-off is already in flight or the device
         is already off — prevents race conditions in area-targeted turn_off
@@ -143,14 +143,13 @@ class GoveeSegmentEntity(GoveeEntity, LightEntity, RestoreEntity):
 
         if not device_already_off and not power_off_pending:
             command = SegmentColorCommand(
-                segment_indices=(self._segment_index,),
+                segment_indices=self._segment_indices,
                 color=RGBColor(r=0, g=0, b=0),
             )
             await self.coordinator.async_control_device(self._device_id, command)
         else:
             _LOGGER.debug(
-                "Skipping segment %d turn_off for %s (power_off_pending=%s, device_already_off=%s)",
-                self._segment_index,
+                "Skipping grouped segments turn_off for %s (power_off_pending=%s, device_already_off=%s)",
                 self._device_id,
                 power_off_pending,
                 device_already_off,

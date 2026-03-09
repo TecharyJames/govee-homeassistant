@@ -29,7 +29,7 @@ from .api.auth import GoveeAuthClient
 from .api.ble_packet import DIY_STYLE_NAMES
 from .ble_passthrough import BlePassthroughManager
 from .const import DOMAIN
-from .models import GoveeDevice, GoveeDeviceState
+from .models import GoveeDevice, GoveeDeviceState, RGBColor
 from .models.commands import (
     BrightnessCommand,
     ColorCommand,
@@ -41,7 +41,9 @@ from .models.commands import (
     PowerCommand,
     SceneCommand,
     SnapshotCommand,
+    TemperatureSettingCommand,
     ToggleCommand,
+    WorkModeCommand,
     create_dreamview_command,
 )
 from .models.device import INSTANCE_DREAMVIEW, INSTANCE_HDMI_SOURCE
@@ -133,6 +135,10 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
             ensure_device_topic=self._ensure_device_topic,
         )
 
+        # Track in-flight power-off commands so segment entities can
+        # avoid racing with a concurrent device power-off (issue #16).
+        self._pending_power_off: set[str] = set()
+
         # Track rate limit state to avoid spamming repair issues
         self._rate_limited: bool = False
 
@@ -191,6 +197,13 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
     def get_state(self, device_id: str) -> GoveeDeviceState | None:
         """Get current state for a device."""
         return self._states.get(device_id)
+
+    def is_power_off_pending(self, device_id: str) -> bool:
+        """Return True if a power-off command is in flight for this device.
+
+        Segment entities use this to avoid racing with a concurrent power-off.
+        """
+        return device_id in self._pending_power_off
 
     def register_observer(self, observer: IStateObserver) -> None:
         """Register a state change observer."""
@@ -457,14 +470,27 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
             # Clear them when device is turned off (no longer active).
             existing_state = self._states.get(device_id)
             if existing_state:
-                self._preserve_optimistic_field(
-                    existing_state, state, device_id, "active_scene", "scene"
-                )
+                # Scenes persist on device across power cycles — always preserve
+                if existing_state.active_scene:
+                    state.active_scene = existing_state.active_scene
+                if existing_state.active_scene_name:
+                    state.active_scene_name = existing_state.active_scene_name
+                # DIY scenes also persist across power cycles
+                if existing_state.active_diy_scene:
+                    state.active_diy_scene = existing_state.active_diy_scene
+                # Preserve restore-target fields across API polls.
+                # These are "memory" fields — always preserved regardless of power state.
+                if existing_state.last_color is not None:
+                    state.last_color = existing_state.last_color
+                if existing_state.last_color_temp_kelvin is not None:
+                    state.last_color_temp_kelvin = existing_state.last_color_temp_kelvin
+                if existing_state.last_scene_id is not None:
+                    state.last_scene_id = existing_state.last_scene_id
+                if existing_state.last_scene_name is not None:
+                    state.last_scene_name = existing_state.last_scene_name
+
                 self._preserve_optimistic_field(
                     existing_state, state, device_id, "dreamview_enabled", "DreamView"
-                )
-                self._preserve_optimistic_field(
-                    existing_state, state, device_id, "active_diy_scene", "DIY scene"
                 )
                 # Music mode has extra fields to preserve alongside the flag
                 if existing_state.music_mode_enabled:
@@ -539,6 +565,12 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
             _LOGGER.error("Unknown device: %s", device_id)
             return False
 
+        # Track power-off commands so segment entities can detect them
+        # before the first await, ensuring concurrent coroutines see the flag.
+        is_power_off = isinstance(command, PowerCommand) and not command.power_on
+        if is_power_off:
+            self._pending_power_off.add(device_id)
+
         try:
             success = await self._api_client.control_device(
                 device_id,
@@ -558,6 +590,9 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         except GoveeApiError as err:
             _LOGGER.error("Control command failed: %s", err)
             return False
+        finally:
+            if is_power_off:
+                self._pending_power_off.discard(device_id)
 
     async def _ensure_device_topic(self, device_id: str) -> str | None:
         """Get device MQTT topic, refreshing if needed.
@@ -866,6 +901,10 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         elif isinstance(command, ModeCommand):
             if command.mode_instance == INSTANCE_HDMI_SOURCE:
                 state.apply_optimistic_hdmi_source(command.value)
+        elif isinstance(command, TemperatureSettingCommand):
+            state.heater_temperature = command.temperature
+        elif isinstance(command, WorkModeCommand):
+            state.apply_optimistic_work_mode(command.work_mode, command.mode_value)
         elif isinstance(command, MusicModeCommand):
             # Look up mode name from device capabilities for display
             device = self._devices.get(device_id)
@@ -919,11 +958,64 @@ class GoveeCoordinator(DataUpdateCoordinator[dict[str, GoveeDeviceState]]):
         device = self._devices.get(device_id)
         return await self._scene_cache.async_get_diy_scenes(device_id, device, refresh)
 
+    async def async_clear_scene(self, device_id: str) -> None:
+        """Clear active scene by sending a color/color_temp command to exit it on the device.
+
+        Brightness commands don't exit scenes, so we must send a color or color_temp
+        command. Restores the last known color/color_temp when available.
+        """
+        state = self._states.get(device_id)
+        device = self._devices.get(device_id)
+        if not state or not device:
+            return
+
+        # Nothing to clear if no scene is active
+        if not state.active_scene and not state.active_diy_scene:
+            self.clear_scene(device_id)
+            self.clear_diy_scene(device_id)
+            return
+
+        # Resolve the color to restore. Skip RGBColor(0,0,0) — the API returns
+        # colorRgb=0 when a scene is running, which is not a meaningful restore target.
+        color = state.color or state.last_color
+        if color and color.as_packed_int == 0:
+            color = state.last_color
+        color_temp = state.color_temp_kelvin or state.last_color_temp_kelvin
+
+        success = False
+        if color and device.supports_rgb:
+            success = await self.async_control_device(device_id, ColorCommand(color=color))
+        elif color_temp and device.supports_color_temp:
+            success = await self.async_control_device(
+                device_id, ColorTempCommand(kelvin=color_temp)
+            )
+        elif device.supports_color_temp:
+            # Default to midpoint of device's color temp range
+            ct_range = device.color_temp_range
+            if ct_range:
+                midpoint = (ct_range.min_kelvin + ct_range.max_kelvin) // 2
+            else:
+                midpoint = 4000
+            success = await self.async_control_device(
+                device_id, ColorTempCommand(kelvin=midpoint)
+            )
+        elif device.supports_rgb:
+            success = await self.async_control_device(
+                device_id, ColorCommand(color=RGBColor(255, 255, 255))
+            )
+
+        if success:
+            # ColorCommand/ColorTempCommand already clear active_scene via optimistic handlers,
+            # but we also need to clear active_diy_scene explicitly.
+            self.clear_scene(device_id)
+            self.clear_diy_scene(device_id)
+
     def clear_scene(self, device_id: str) -> None:
         """Clear active scene for a device."""
         state = self._states.get(device_id)
         if state:
             state.active_scene = None
+            state.active_scene_name = None
             state.source = "optimistic"
 
     def clear_diy_scene(self, device_id: str) -> None:

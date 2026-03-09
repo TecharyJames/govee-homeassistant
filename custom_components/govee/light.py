@@ -15,6 +15,7 @@ from typing import Any
 from homeassistant.components.light import (  # type: ignore[attr-defined]
     ATTR_BRIGHTNESS,
     ATTR_COLOR_TEMP_KELVIN,
+    ATTR_EFFECT,
     ATTR_RGB_COLOR,
     ColorMode,
     LightEntity,
@@ -25,7 +26,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import CONF_ENABLE_SEGMENTS, DEFAULT_ENABLE_SEGMENTS
+from .const import (
+    CONF_ENABLE_SCENES,
+    DEFAULT_ENABLE_SCENES,
+    SEGMENT_MODE_GROUPED,
+    SEGMENT_MODE_INDIVIDUAL,
+)
 from .coordinator import GoveeCoordinator
 from .entity import GoveeEntity
 from .models import (
@@ -35,7 +41,9 @@ from .models import (
     GoveeDevice,
     PowerCommand,
     RGBColor,
+    SceneCommand,
 )
+from .platforms.grouped_segment import GoveeGroupedSegmentEntity
 from .platforms.segment import GoveeSegmentEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,36 +62,55 @@ async def async_setup_entry(
 
     entities: list[LightEntity] = []
 
-    # Check if segments are enabled
-    enable_segments = entry.options.get(CONF_ENABLE_SEGMENTS, DEFAULT_ENABLE_SEGMENTS)
+    # Get per-device segment modes
+    device_modes = entry.options.get("segment_mode_by_device", {})
+
+    # Check if scenes are enabled in options
+    enable_scenes = entry.options.get(CONF_ENABLE_SCENES, DEFAULT_ENABLE_SCENES)
 
     for device in coordinator.devices.values():
         # Only create light entities for devices with power control (not fans)
         if device.supports_power and not device.is_fan:
-            entities.append(GoveeLightEntity(coordinator, device))
+            entities.append(GoveeLightEntity(coordinator, device, enable_scenes))
 
-        # Create segment entities for RGBIC devices
-        _LOGGER.debug(
-            "Segment check for %s: enable_segments=%s, supports_segments=%s, segment_count=%d",
-            device.name,
-            enable_segments,
-            device.supports_segments,
-            device.segment_count,
-        )
-        if enable_segments and device.supports_segments and device.segment_count > 0:
+        # Create segment entities for RGBIC devices based on per-device mode
+        if device.supports_segments and device.segment_count > 0:
+            # Use per-device mode if set, otherwise default to individual
+            segment_mode = device_modes.get(device.device_id, SEGMENT_MODE_INDIVIDUAL)
+
             _LOGGER.debug(
-                "Creating %d segment entities for %s",
-                device.segment_count,
+                "Segment check for %s: device_mode=%s, supports_segments=%s, segment_count=%d",
                 device.name,
+                device_modes.get(device.device_id, "default (individual)"),
+                device.supports_segments,
+                device.segment_count,
             )
-            for segment_index in range(device.segment_count):
+
+            if segment_mode == SEGMENT_MODE_GROUPED:
+                _LOGGER.debug(
+                    "Creating grouped segment entity for %s",
+                    device.name,
+                )
                 entities.append(
-                    GoveeSegmentEntity(
+                    GoveeGroupedSegmentEntity(
                         coordinator=coordinator,
                         device=device,
-                        segment_index=segment_index,
                     )
                 )
+            elif segment_mode == SEGMENT_MODE_INDIVIDUAL:
+                _LOGGER.debug(
+                    "Creating %d individual segment entities for %s",
+                    device.segment_count,
+                    device.name,
+                )
+                for segment_index in range(device.segment_count):
+                    entities.append(
+                        GoveeSegmentEntity(
+                            coordinator=coordinator,
+                            device=device,
+                            segment_index=segment_index,
+                        )
+                    )
 
     async_add_entities(entities)
     _LOGGER.debug("Set up %d Govee light entities", len(entities))
@@ -104,6 +131,7 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
         self,
         coordinator: GoveeCoordinator,
         device: GoveeDevice,
+        enable_scenes: bool = True,
     ) -> None:
         """Initialize the light entity."""
         super().__init__(coordinator, device)
@@ -113,14 +141,18 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
 
         # Determine supported color modes
         self._attr_supported_color_modes = self._determine_color_modes()
-        self._attr_color_mode = self._get_current_color_mode()
-
         # Get device brightness range
         self._brightness_min, self._brightness_max = device.brightness_range
 
-        # Add effect support if device has scenes
-        if device.supports_scenes:
+        # Effect support: only if device has scenes AND scenes are enabled
+        self._enable_scenes = device.supports_scenes and enable_scenes
+        if self._enable_scenes:
             self._attr_supported_features = LightEntityFeature.EFFECT
+
+        # Scene-to-effect mappings (populated in async_added_to_hass)
+        self._effect_to_scene: dict[str, tuple[int, str]] = {}
+        self._scene_id_to_effect: dict[str, str] = {}
+        self._effect_names: list[str] = []
 
     def _determine_color_modes(self) -> set[ColorMode]:
         """Determine supported color modes from device capabilities."""
@@ -140,10 +172,16 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
 
         return modes
 
-    def _get_current_color_mode(self) -> ColorMode:
-        """Get current color mode based on state."""
+    @property
+    def color_mode(self) -> ColorMode:
+        """Return current color mode based on device state.
+
+        Dynamically computed so it always reflects actual state.
+        Always returns a value from supported_color_modes to satisfy
+        HA Core validation (color_mode must be in supported_color_modes).
+        """
         state = self.device_state
-        modes = self._attr_supported_color_modes or set()
+        modes = self.supported_color_modes or {ColorMode.ONOFF}
 
         if state and state.color_temp_kelvin is not None:
             if ColorMode.COLOR_TEMP in modes:
@@ -153,10 +191,12 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
             if ColorMode.RGB in modes:
                 return ColorMode.RGB
 
+        # Default to first supported mode (prefer COLOR_TEMP > BRIGHTNESS > any)
         if ColorMode.BRIGHTNESS in modes:
             return ColorMode.BRIGHTNESS
-
-        return ColorMode.ONOFF
+        if ColorMode.COLOR_TEMP in modes:
+            return ColorMode.COLOR_TEMP
+        return ColorMode(next(iter(modes)))
 
     @property
     def is_on(self) -> bool | None:
@@ -200,6 +240,24 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
         temp_range = self._device.color_temp_range
         return temp_range.max_kelvin if temp_range else 9000
 
+    @property
+    def effect_list(self) -> list[str] | None:
+        """Return list of available effects (scene names)."""
+        return self._effect_names if self._effect_names else None
+
+    @property
+    def effect(self) -> str | None:
+        """Return currently active effect (scene name)."""
+        state = self.device_state
+        if not state or not state.active_scene:
+            return None
+        # Look up display name from scene ID mapping
+        effect_name = self._scene_id_to_effect.get(state.active_scene)
+        if effect_name:
+            return effect_name
+        # Fall back to stored scene name if ID not in mapping
+        return state.active_scene_name
+
     def _ha_to_device_brightness(self, ha_brightness: int) -> int:
         """Convert HA brightness (0-255) to device range, respecting min."""
         ratio = ha_brightness / HA_BRIGHTNESS_MAX
@@ -213,11 +271,29 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
         if device_range <= 0:
             return 0
         return int(
-            (device_brightness - self._brightness_min) / device_range * HA_BRIGHTNESS_MAX
+            (device_brightness - self._brightness_min)
+            / device_range
+            * HA_BRIGHTNESS_MAX
         )
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on with optional parameters."""
+        # Handle effect (scene activation)
+        if ATTR_EFFECT in kwargs:
+            effect_name = kwargs[ATTR_EFFECT]
+            scene_info = self._effect_to_scene.get(effect_name)
+            if scene_info:
+                scene_id, scene_name = scene_info
+                await self.coordinator.async_control_device(
+                    self._device_id,
+                    SceneCommand(scene_id=scene_id, scene_name=scene_name),
+                )
+            else:
+                _LOGGER.warning(
+                    "Unknown effect '%s' for %s", effect_name, self._device.name
+                )
+            return
+
         # Handle brightness
         if ATTR_BRIGHTNESS in kwargs:
             ha_brightness = kwargs[ATTR_BRIGHTNESS]
@@ -237,8 +313,6 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
                 ColorCommand(color=color),
             ):
                 _LOGGER.warning("Color command failed for %s", self._device_id)
-            else:
-                self._attr_color_mode = ColorMode.RGB
 
         # Handle color temperature
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
@@ -248,8 +322,6 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
                 ColorTempCommand(kelvin=kelvin),
             ):
                 _LOGGER.warning("Color temp command failed for %s", self._device_id)
-            else:
-                self._attr_color_mode = ColorMode.COLOR_TEMP
 
         # Only send power command if light is off or no attributes were set
         has_attribute = any(
@@ -269,8 +341,35 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
             PowerCommand(power_on=False),
         )
 
+    def _build_effect_mapping(self, scenes: list[dict[str, Any]]) -> None:
+        """Build effect name mappings from scene data.
+
+        Handles duplicate scene names by appending a counter,
+        mirroring the logic in GoveeSceneSelectEntity.
+        """
+        self._effect_to_scene = {}
+        self._scene_id_to_effect = {}
+        names: list[str] = []
+
+        for scene_data in scenes:
+            scene_id = scene_data.get("value", {}).get("id", 0)
+            scene_name = scene_data.get("name", f"Scene {scene_id}")
+
+            # Handle duplicate names by appending counter
+            unique_name = scene_name
+            counter = 1
+            while unique_name in self._effect_to_scene:
+                unique_name = f"{scene_name} ({counter})"
+                counter += 1
+
+            self._effect_to_scene[unique_name] = (scene_id, scene_name)
+            self._scene_id_to_effect[str(scene_id)] = unique_name
+            names.append(unique_name)
+
+        self._effect_names = names
+
     async def async_added_to_hass(self) -> None:
-        """Restore state for group devices."""
+        """Restore state for group devices and load scenes for effects."""
         await super().async_added_to_hass()
 
         if self._device.is_group:
@@ -284,3 +383,9 @@ class GoveeLightEntity(GoveeEntity, LightEntity, RestoreEntity):
                         last_state.attributes["brightness"]
                     )
                 self.coordinator.restore_group_state(self._device_id, power, brightness)
+
+        # Load scenes for effect support (skip group devices - no scene API support)
+        if self._enable_scenes and not self._device.is_group:
+            scenes = await self.coordinator.async_get_scenes(self._device_id)
+            if scenes:
+                self._build_effect_mapping(scenes)

@@ -22,6 +22,7 @@ CAPABILITY_TOGGLE = "devices.capabilities.toggle"
 CAPABILITY_WORK_MODE = "devices.capabilities.work_mode"
 CAPABILITY_PROPERTY = "devices.capabilities.property"
 CAPABILITY_MODE = "devices.capabilities.mode"
+CAPABILITY_TEMPERATURE_SETTING = "devices.capabilities.temperature_setting"
 
 # Device type constants
 DEVICE_TYPE_LIGHT = "devices.types.light"
@@ -29,6 +30,7 @@ DEVICE_TYPE_PLUG = "devices.types.socket"
 DEVICE_TYPE_HEATER = "devices.types.heater"
 DEVICE_TYPE_HUMIDIFIER = "devices.types.humidifier"
 DEVICE_TYPE_FAN = "devices.types.fan"
+DEVICE_TYPE_PURIFIER = "devices.types.purifier"
 
 # Instance constants
 INSTANCE_POWER = "powerSwitch"
@@ -47,6 +49,10 @@ INSTANCE_WORK_MODE = "workMode"
 INSTANCE_HDMI_SOURCE = "hdmiSource"
 INSTANCE_MUSIC_MODE = "musicMode"
 INSTANCE_DREAMVIEW = "dreamViewToggle"
+INSTANCE_TEMPERATURE = "temperature"
+INSTANCE_TARGET_TEMPERATURE = "targetTemperature"
+INSTANCE_FAN_SPEED = "fanSpeed"
+INSTANCE_PURIFIER_MODE = "purifierMode"
 
 
 @dataclass(frozen=True)
@@ -304,6 +310,16 @@ class GoveeDevice:
         return self.device_type == DEVICE_TYPE_FAN
 
     @property
+    def is_heater(self) -> bool:
+        """Check if device is a heater."""
+        return self.device_type == DEVICE_TYPE_HEATER
+
+    @property
+    def is_purifier(self) -> bool:
+        """Check if device is an air purifier."""
+        return self.device_type == DEVICE_TYPE_PURIFIER
+
+    @property
     def supports_oscillation(self) -> bool:
         """Check if device supports oscillation (fans)."""
         return any(cap.is_oscillation for cap in self.capabilities)
@@ -392,6 +408,125 @@ class GoveeDevice:
                         range_info = f.get("range", {})
                         return (range_info.get("min", 0), range_info.get("max", 100))
         return (0, 100)
+
+    def get_temperature_range(self) -> tuple[int, int]:
+        """Extract temperature range from capability.
+
+        Parses STRUCT-based temperature_setting capability where the range
+        is nested inside the fields array under the 'temperature' field.
+
+        Returns (min, max) tuple, defaulting to (16, 35) Celsius.
+        """
+        for cap in self.capabilities:
+            if (
+                cap.type == CAPABILITY_TEMPERATURE_SETTING
+                and cap.instance == INSTANCE_TARGET_TEMPERATURE
+            ):
+                for f in cap.parameters.get("fields", []):
+                    if f.get("fieldName") == "temperature":
+                        range_data = f.get("range", {})
+                        return (
+                            int(range_data.get("min", 16)),
+                            int(range_data.get("max", 35)),
+                        )
+        return (16, 35)
+
+    def get_fan_speed_options(self) -> list[dict[str, Any]]:
+        """Extract fan speed options from work_mode capability.
+
+        Parses both workMode and modeValue fields, flattening nested
+        sub-options. For example, H7131 has gearMode containing
+        Low/Medium/High sub-options in the modeValue field.
+
+        Returns list of {"name": "Low", "work_mode": 1, "mode_value": 0} dicts.
+        """
+        for cap in self.capabilities:
+            if cap.type == CAPABILITY_WORK_MODE and cap.instance == INSTANCE_WORK_MODE:
+                work_mode_field: dict[str, Any] | None = None
+                mode_value_field: dict[str, Any] | None = None
+                for f in cap.parameters.get("fields", []):
+                    if f.get("fieldName") == "workMode":
+                        work_mode_field = f
+                    elif f.get("fieldName") == "modeValue":
+                        mode_value_field = f
+
+                if not work_mode_field:
+                    return []
+
+                # Build modeValue lookup by name
+                mv_lookup: dict[str, dict[str, Any]] = {}
+                if mode_value_field:
+                    for mv_opt in mode_value_field.get("options", []):
+                        name = mv_opt.get("name", "")
+                        if name:
+                            mv_lookup[name] = mv_opt
+
+                result: list[dict[str, Any]] = []
+                for wm_opt in work_mode_field.get("options", []):
+                    wm_name = wm_opt.get("name", "")
+                    wm_value = wm_opt.get("value")
+                    if not wm_name or wm_value is None:
+                        continue
+
+                    # Check for nested sub-options (e.g., gearMode → Low/Medium/High)
+                    mv_entry = mv_lookup.get(wm_name, {})
+                    sub_options: list[dict[str, Any]] = mv_entry.get("options", [])
+
+                    if sub_options:
+                        for sub_opt in sub_options:
+                            sub_name = sub_opt.get("name", "")
+                            sub_value = sub_opt.get("value")
+                            if sub_value is not None:
+                                if not sub_name:
+                                    sub_name = f"Speed {sub_value}"
+                                result.append({
+                                    "name": sub_name,
+                                    "work_mode": wm_value,
+                                    "mode_value": sub_value,
+                                })
+                    else:
+                        default_mv: int = mv_entry.get("defaultValue", 0)
+                        result.append({
+                            "name": wm_name,
+                            "work_mode": wm_value,
+                            "mode_value": default_mv,
+                        })
+
+                return result
+        return []
+
+    def get_purifier_mode_options(self) -> list[dict[str, Any]]:
+        """Extract purifier mode options from capability.
+
+        Supports two patterns:
+        1. Simple CAPABILITY_MODE with options (e.g., H6006)
+        2. Complex CAPABILITY_WORK_MODE with nested modeValue options (e.g., H7127)
+
+        Returns list of {"name": "Sleep", "value": 1} dicts.
+        For work_mode capabilities, extracts gearMode options.
+        """
+        # Pattern 1: Simple CAPABILITY_MODE (e.g., H6006)
+        for cap in self.capabilities:
+            if cap.type == CAPABILITY_MODE and cap.instance == INSTANCE_PURIFIER_MODE:
+                options: list[dict[str, Any]] = cap.parameters.get("options", [])
+                return options
+
+        # Pattern 2: Complex CAPABILITY_WORK_MODE (e.g., H7127)
+        # Some purifiers use work_mode like fans, with modeValue options
+        for cap in self.capabilities:
+            if cap.type == CAPABILITY_WORK_MODE and cap.instance == "workMode":
+                # Extract gear mode options from modeValue field in STRUCT
+                fields = cap.parameters.get("fields", [])
+                for f in fields:
+                    if f.get("fieldName") == "modeValue":
+                        options = f.get("options", [])
+                        # Find the gearMode options within the nested structure
+                        for opt in options:
+                            if opt.get("name") == "gearMode":
+                                gear_options: list[dict[str, Any]] = opt.get("options", [])
+                                if gear_options:
+                                    return gear_options
+        return []
 
     @property
     def is_light_device(self) -> bool:
