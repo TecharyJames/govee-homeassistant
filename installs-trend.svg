@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="192" viewBox="0 0 480 192" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+<rect x="0.5" y="0.5" width="479" height="191" rx="12" fill="#161b22" stroke="#30363d"/>
+<text x="20" y="34" font-size="11" fill="#8b949e" font-weight="600" text-anchor="start" letter-spacing="1.5">ACTIVE INSTALLS</text>
+<text x="20" y="88" font-size="46" fill="#41BDF5" font-weight="700" text-anchor="start">97</text>
+<text x="24" y="116" font-size="12" fill="#f85149" font-weight="600" text-anchor="start">▼ -1711 / 7d</text>
+<defs><linearGradient id="ig" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#41BDF5" stop-opacity="0.45"/><stop offset="1" stop-color="#41BDF5" stop-opacity="0"/></linearGradient></defs>
+<path d="M190,162 L190.0,161.6 L199.6,161.5 L209.3,161.6 L218.9,161.6 L228.6,140.8 L238.2,98.3 L247.9,82.6 L257.5,72.1 L267.1,65.8 L276.8,59.2 L286.4,59.2 L296.1,59.2 L305.7,43.5 L315.4,40.0 L325.0,161.8 L334.6,136.5 L344.3,95.3 L353.9,161.8 L363.6,153.7 L373.2,108.0 L382.9,80.8 L392.5,68.3 L402.1,150.7 L411.8,161.9 L421.4,129.0 L431.1,162.0 L440.7,162.0 L450.4,139.7 L460.0,160.1 L460.0,162 Z" fill="url(#ig)"/>
+<polyline points="190.0,161.6 199.6,161.5 209.3,161.6 218.9,161.6 228.6,140.8 238.2,98.3 247.9,82.6 257.5,72.1 267.1,65.8 276.8,59.2 286.4,59.2 296.1,59.2 305.7,43.5 315.4,40.0 325.0,161.8 334.6,136.5 344.3,95.3 353.9,161.8 363.6,153.7 373.2,108.0 382.9,80.8 392.5,68.3 402.1,150.7 411.8,161.9 421.4,129.0 431.1,162.0 440.7,162.0 450.4,139.7 460.0,160.1" fill="none" stroke="#41BDF5" stroke-width="2" stroke-linejoin="round"/>
+<circle cx="460.0" cy="160.1" r="3.5" fill="#41BDF5"/>
+<text x="20" y="178" font-size="10.5" fill="#8b949e" font-weight="400" text-anchor="start">HA analytics · of 9.6k domain total</text>
+<text x="460" y="178" font-size="10.5" fill="#8b949e" font-weight="400" text-anchor="end">updated 2026-07-03 09:38 UTC</text>
+</svg>
